@@ -4,8 +4,12 @@ declare(strict_types=1);
 
 return [
     'sumup' => [
-        // Generate a personal access token via https://me.sumup.com/developers
-        'access_token' => 'your-access-token-here',
+        // Choose whether you authenticate with an API key (own account) or an OAuth access token (multi-merchant platforms)
+        'auth_method' => 'api_key', // allowed values: api_key, oauth
+        // Leave blank when you store the key via public/anmeldung.php
+        'api_key' => '',
+        // For OAuth set auth_method to "oauth" and place the access token below instead
+        'access_token' => 'your-oauth-access-token-here',
         // Default currency in ISO 4217 format
         'currency' => 'EUR',
         // Configure one or multiple SumUp terminals that can receive payments from the web UI
@@ -34,5 +38,10 @@ return [
     'log' => [
         // Absolute or relative path where transaction attempts will be appended (will be created automatically)
         'transactions_file' => __DIR__ . '/../var/transactions.log',
+    ],
+    'secure_store' => [
+        // Files used by the encrypted credential store (not committed to Git)
+        'credential_file' => __DIR__ . '/../var/sumup_credentials.json',
+        'key_file' => __DIR__ . '/../var/secure_store.key',
     ],
 ];

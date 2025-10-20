@@ -11,11 +11,16 @@ final class SumUpTerminalClient
     private const API_BASE_URL = 'https://api.sumup.com/v0.1';
 
     public function __construct(
-        private readonly string $accessToken,
-        private readonly string $terminalSerial
+        private readonly string $credential,
+        private readonly string $terminalSerial,
+        private readonly string $authMethod = 'api_key'
     ) {
-        if ($accessToken === '') {
-            throw new RuntimeException('Missing SumUp access token.');
+        if (!in_array($this->authMethod, ['api_key', 'oauth'], true)) {
+            throw new RuntimeException('Unsupported SumUp authentication method.');
+        }
+
+        if ($credential === '') {
+            throw new RuntimeException('Missing SumUp credentials.');
         }
 
         if ($terminalSerial === '') {
@@ -92,7 +97,7 @@ final class SumUpTerminalClient
             CURLOPT_HTTPHEADER => [
                 'Content-Type: application/json',
                 'Accept: application/json',
-                'Authorization: Bearer ' . $this->accessToken,
+                sprintf('Authorization: %s', $this->buildAuthorizationHeader()),
             ],
         ]);
 
@@ -118,5 +123,11 @@ final class SumUpTerminalClient
             'status' => $statusCode,
             'body' => $decoded,
         ];
+    }
+
+    private function buildAuthorizationHeader(): string
+    {
+        // SumUp accepts API keys and OAuth tokens via Bearer authorization.
+        return 'Bearer ' . $this->credential;
     }
 }

@@ -2,9 +2,13 @@
 
 declare(strict_types=1);
 
+use SumUp\BasicAuth;
+use SumUp\CredentialStore;
 use SumUp\SumUpTerminalClient;
 
 require_once __DIR__ . '/../src/SumUpTerminalClient.php';
+require_once __DIR__ . '/../src/BasicAuth.php';
+require_once __DIR__ . '/../src/CredentialStore.php';
 
 $configPath = __DIR__ . '/../config/config.php';
 
@@ -17,7 +21,9 @@ if (!file_exists($configPath)) {
 /**
  * @var array{
  *     sumup: array{
+ *         auth_method?: string,
  *         access_token?: string,
+ *         api_key?: string,
  *         currency?: string,
  *         terminal_serial?: string,
  *         terminal_label?: string,
@@ -30,7 +36,62 @@ if (!file_exists($configPath)) {
 $config = require $configPath;
 
 $sumUpConfig = $config['sumup'] ?? [];
-$accessToken = (string) ($sumUpConfig['access_token'] ?? '');
+$authMethod = strtolower((string) ($sumUpConfig['auth_method'] ?? ''));
+$apiKey = trim((string) ($sumUpConfig['api_key'] ?? ''));
+$accessToken = trim((string) ($sumUpConfig['access_token'] ?? ''));
+
+$secureStoreConfig = $config['secure_store'] ?? [];
+$credentialStore = null;
+$secureStoreError = null;
+$storedCredentialDetails = null;
+
+if (isset($secureStoreConfig['credential_file'], $secureStoreConfig['key_file'])) {
+    try {
+        $credentialStore = new CredentialStore(
+            (string) $secureStoreConfig['credential_file'],
+            (string) $secureStoreConfig['key_file']
+        );
+    } catch (Throwable $storeException) {
+        $secureStoreError = $storeException->getMessage();
+    }
+}
+
+if ($authMethod === '') {
+    $authMethod = $accessToken !== '' ? 'oauth' : 'api_key';
+}
+
+if (!in_array($authMethod, ['api_key', 'oauth'], true)) {
+    http_response_code(500);
+    echo 'Ungültige SumUp-Authentifizierungsmethode. Erlaubt sind "api_key" oder "oauth".';
+    exit;
+}
+
+$credential = $authMethod === 'oauth' ? $accessToken : $apiKey;
+
+if ($credentialStore instanceof CredentialStore) {
+    $storedCredentialDetails = $credentialStore->getApiCredential();
+}
+
+if ($authMethod === 'api_key' && $apiKey === '' && $storedCredentialDetails !== null) {
+    $apiKey = $storedCredentialDetails['api_key'];
+    $credential = $apiKey;
+}
+
+if ($credential === '') {
+    http_response_code(500);
+    if ($authMethod === 'oauth') {
+        echo 'Kein OAuth Access Token konfiguriert. Bitte ergänzen Sie config/config.php.';
+    } else {
+        $hint = 'Kein SumUp API-Key konfiguriert. Bitte ergänzen Sie config/config.php.';
+
+        if ($credentialStore instanceof CredentialStore) {
+            $hint .= ' Alternativ können Sie Ihren Schlüssel über anmeldung.php sicher hinterlegen.';
+        }
+
+        echo $hint;
+    }
+    exit;
+}
 $defaultTerminalSerial = (string) ($sumUpConfig['terminal_serial'] ?? '');
 $defaultTerminalLabel = (string) ($sumUpConfig['terminal_label'] ?? '');
 $currency = (string) ($sumUpConfig['currency'] ?? 'EUR');
@@ -74,35 +135,7 @@ $logConfig = $config['log'] ?? [];
 $transactionsLogFile = (string) ($logConfig['transactions_file'] ?? (__DIR__ . '/../var/transactions.log'));
 
 $authConfig = $config['auth'] ?? [];
-$authRealm = (string) ($authConfig['realm'] ?? 'SumUp Terminal');
-$authUsers = $authConfig['users'] ?? [];
-
-if ($authUsers === []) {
-    http_response_code(500);
-    echo 'Keine Benutzer für den Zugriff konfiguriert. Bitte ergänzen Sie config/config.php.';
-    exit;
-}
-
-$authenticated = false;
-$username = '';
-
-if (isset($_SERVER['PHP_AUTH_USER'], $_SERVER['PHP_AUTH_PW'])) {
-    $username = (string) $_SERVER['PHP_AUTH_USER'];
-    $password = (string) $_SERVER['PHP_AUTH_PW'];
-
-    if (array_key_exists($username, $authUsers)) {
-        $storedHash = (string) $authUsers[$username];
-        $authenticated = password_verify($password, $storedHash)
-            || hash_equals($storedHash, $password);
-    }
-}
-
-if ($authenticated === false) {
-    header('WWW-Authenticate: Basic realm="' . addslashes($authRealm) . '", charset="UTF-8"');
-    http_response_code(401);
-    echo 'Authentifizierung erforderlich.';
-    exit;
-}
+$username = BasicAuth::enforce($authConfig);
 
 $error = null;
 $result = null;
@@ -181,7 +214,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     if ($error === null) {
         try {
-            $client = new SumUpTerminalClient($accessToken, $selectedTerminalSerial);
+            $client = new SumUpTerminalClient($credential, $selectedTerminalSerial, $authMethod);
             $response = $client->sendPayment($amount, $currency, $externalId, $description, $tipAmount);
 
             if ($response['status'] >= 200 && $response['status'] < 300) {
@@ -323,6 +356,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             border: 1px solid #bbf7d0;
         }
 
+        .alert.info {
+            background: #bfdbfe;
+            color: #1e3a8a;
+            border: 1px solid #93c5fd;
+        }
+
         pre {
             background: #0f172a;
             color: #e2e8f0;
@@ -365,6 +404,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 border-color: rgba(22, 101, 52, 0.4);
             }
 
+            .alert.info {
+                background: rgba(30, 64, 175, 0.2);
+                border-color: rgba(30, 64, 175, 0.4);
+                color: #bfdbfe;
+            }
+
             .alert.error {
                 background: rgba(153, 27, 27, 0.2);
                 border-color: rgba(153, 27, 27, 0.4);
@@ -380,6 +425,35 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 <body>
     <div class="container">
         <h1>SumUp Zahlung starten</h1>
+
+        <?php if ($authMethod === 'api_key'): ?>
+            <?php if ($secureStoreError !== null): ?>
+                <div class="alert error">
+                    <strong>Sichere Ablage deaktiviert:</strong>
+                    <div><?= htmlspecialchars($secureStoreError, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') ?></div>
+                </div>
+            <?php elseif ($credentialStore instanceof CredentialStore && $storedCredentialDetails !== null): ?>
+                <div class="alert info">
+                    <strong>API-Key geladen</strong>
+                    <p>
+                        Der hinterlegte Schlüssel<?= $storedCredentialDetails['merchant_id'] !== ''
+                            ? ' für ' . htmlspecialchars($storedCredentialDetails['merchant_id'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8')
+                            : '' ?> wurde automatisch verwendet.
+                        <?php if (isset($storedCredentialDetails['updated_at']) && $storedCredentialDetails['updated_at'] !== ''): ?>
+                            <br>
+                            Zuletzt aktualisiert: <?= htmlspecialchars($storedCredentialDetails['updated_at'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') ?>
+                        <?php endif; ?>
+                    </p>
+                </div>
+            <?php elseif ($credentialStore instanceof CredentialStore): ?>
+                <div class="alert info">
+                    <strong>API-Key hinterlegen</strong>
+                    <p>
+                        Besuchen Sie <a href="anmeldung.php">anmeldung.php</a>, um Ihren SumUp API-Key sicher zu speichern.
+                    </p>
+                </div>
+            <?php endif; ?>
+        <?php endif; ?>
         <?php if ($error !== null): ?>
             <div class="alert error">
                 <strong>Fehler:</strong>

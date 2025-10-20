@@ -5,23 +5,55 @@ Dieses Projekt stellt eine einfache PHP-Weboberfläche bereit, mit der du den Re
 ## Voraussetzungen
 
 - PHP 8.1 oder neuer mit aktivierter cURL-Erweiterung
+- PHP-Erweiterung [libsodium](https://www.php.net/manual/de/book.sodium.php) für die verschlüsselte Schlüsselablage
 - Ein SumUp-Terminal mit WLAN-Verbindung
-- Ein SumUp **Terminal API** Zugangstoken (OAuth Access Token)
+- Ein SumUp **Terminal API** API-Key **oder** OAuth-Access-Token
 - Die Seriennummer(n) der Terminals, die Zahlungen entgegennehmen sollen
 
 ## Konfiguration
 
 1. Kopiere die Datei `config/config.example.php` nach `config/config.php`.
-2. Trage dein SumUp-Zugangstoken ein und hinterlege unter `terminals` eine Liste der verwendeten Geräte (Seriennummer + Anzeigename für das Dropdown).
+2. Lege fest, ob du dich mit einem API-Key (`auth_method = "api_key"`) oder einem OAuth-Token (`auth_method = "oauth"`) authentifizieren möchtest. Wenn du den API-Key nicht direkt in der Konfigurationsdatei speichern willst, lasse das Feld `api_key` leer und hinterlege den Schlüssel später sicher über `public/anmeldung.php`.
 3. Passe optional die Standardwährung an (ISO-4217-Code, z. B. `EUR`).
 4. Ersetze die Beispiel-Zugangsdaten durch eigene Benutzer und `password_hash`-Werte.
 5. Lege bei Bedarf einen alternativen Speicherort für das Transaktionsprotokoll fest.
+6. (Optional) Passe die Pfade des verschlüsselten Credential-Stores (`secure_store`) an, falls du die Dateien an einem anderen Ort ablegen möchtest.
 
-> Tipp: Das Access Token erhältst du über den OAuth-Client in deinem SumUp-Entwicklerkonto. Achte darauf, dass es die Berechtigung `transactions.terminal` besitzt.
+> Tipp: Den API-Key findest du unter <https://me.sumup.com/developers>. Melde dich dort mit deinem Händlerkonto an, wähle **„Personal Access Tokens“** aus, erstelle bei Bedarf einen neuen Token und kopiere den angezeigten Schlüssel in die Konfiguration. Das OAuth-Access-Token erzeugst du im gleichen Bereich über deinen OAuth-Client.
 
-## Erforderliche OAuth-Berechtigungen
+## API-Key sicher speichern
 
-Für die Kommunikation mit der SumUp Terminal API muss der OAuth-Client mindestens den Scope `transactions.terminal` erhalten. Ohne diese Berechtigung schlägt das Pushen des Betrags auf das Gerät mit einem HTTP-Fehler 403 fehl.
+Anstatt den SumUp-API-Key in `config/config.php` abzulegen, kannst du ihn nach der Einrichtung über `http://localhost:8000/anmeldung.php` sicher hinterlegen:
+
+1. Melde dich mit den in der Konfiguration hinterlegten Zugangsdaten (HTTP Basic Auth) an.
+2. Trage optional eine Referenz (z. B. deine Händler-E-Mail) ein und füge den SumUp-API-Key ein.
+3. Nach dem Speichern verschlüsselt die Anwendung den Schlüssel mit der PHP-Erweiterung **libsodium** (`sodium`) und legt ihn in `var/sumup_credentials.json` ab; der dazugehörige Schlüssel liegt in `var/secure_store.key`.
+4. Kehre zur Kasse (`index.php`) zurück. Die Anwendung lädt den Schlüssel automatisch und zeigt an, wann er zuletzt aktualisiert wurde.
+
+Zum Löschen des gespeicherten API-Keys nutze die entsprechende Schaltfläche in `anmeldung.php`. Achte darauf, dass dein Webserver Schreibrechte auf das `var/`-Verzeichnis besitzt.
+
+## Authentifizierung bei SumUp
+
+SumUp unterstützt für den Terminal-API-Zugriff zwei Verfahren:
+
+- **API-Key („Personal Access Token“)** – geeignet, wenn du ausschließlich für dein eigenes Händlerkonto arbeitest. Wähle in der Konfiguration `auth_method = "api_key"` und trage den API-Key ein.
+- **OAuth 2.0 Access Token** – erforderlich, wenn deine Anwendung im Namen anderer Händler agiert oder du eine Plattform betreibst. Setze `auth_method = "oauth"` und hinterlege das Access Token.
+
+### Erforderliche OAuth-Berechtigungen
+
+Falls du OAuth verwendest, muss dein Client mindestens den Scope `transactions.terminal` erhalten. Ohne diese Berechtigung schlägt das Pushen des Betrags auf das Gerät mit einem HTTP-Fehler 403 fehl.
+
+### Ablauf der Transaktion
+
+Die Weboberfläche stößt serverseitig einen Request an den SumUp-Readers/Cloud-Endpunkt an, der das SumUp-Solo-Terminal anweist, den Betrag anzuzeigen. Der endgültige Status (bezahlt, abgebrochen usw.) wird von SumUp asynchron über Webhooks gemeldet – richte daher im SumUp-Dashboard die passenden Webhook-URLs ein, wenn du Transaktionen automatisiert weiterverarbeiten möchtest.
+
+### Gibt es Alternativen zu OAuth?
+
+Ja: Wenn du nur für dein eigenes Händlerkonto arbeitest, kannst du statt OAuth den SumUp-API-Key verwenden. Für Plattform-Szenarien mit mehreren Händlerkonten bleibt OAuth 2.0 die einzige Option.
+
+### Warum helfen Webhooks nicht weiter?
+
+Webhooks sind bei SumUp ausschließlich dafür gedacht, dich **über bereits stattgefundene Ereignisse** (z. B. abgeschlossene Zahlungen) zu informieren. Sie können **keine** Zahlungsanforderung an ein Terminal auslösen oder Beträge an das Gerät „pushen“. Um einen Betrag proaktiv auf ein Terminal zu schicken, benötigst du zwingend einen authentifizierten Aufruf der Terminal-API mit deinem API-Key oder einem OAuth-Access-Token.
 
 ## Anwendung starten
 
