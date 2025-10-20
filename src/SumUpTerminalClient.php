@@ -99,6 +99,109 @@ final class SumUpTerminalClient
     }
 
     /**
+     * Activates/links a terminal reader to the authenticated merchant account using the pairing/activation code
+     * shown on the device.
+     *
+     * @param string      $credential    API key or OAuth token.
+     * @param string      $authMethod    Authentication method, either "api_key" or "oauth".
+     * @param string      $activationCode Short-lived activation code from the terminal screen.
+     * @param string|null $merchantCode  Optional merchant code (e.g. MCRNF79M). Required for the merchant endpoint.
+     * @param string|null $label         Optional label that should appear in the SumUp dashboard.
+     *
+     * @return array{
+     *     status:int,
+     *     body:array<string,mixed>,
+     *     request:array<string,mixed>,
+     *     response_raw:string
+     * }
+     */
+    public static function activateTerminal(
+        string $credential,
+        string $authMethod,
+        string $activationCode,
+        ?string $merchantCode = null,
+        ?string $label = null
+    ): array {
+        self::assertCredential($credential, $authMethod);
+
+        $activationCode = self::normaliseActivationCode($activationCode);
+
+        if ($activationCode === '') {
+            throw new RuntimeException('Aktivierungscode darf nicht leer sein.');
+        }
+
+        $payload = [
+            'activation_code' => $activationCode,
+        ];
+
+        if ($label !== null && $label !== '') {
+            $payload['label'] = $label;
+        }
+
+        $previousAttempts = [];
+        $merchantCode = $merchantCode !== null ? trim($merchantCode) : '';
+
+        if ($merchantCode !== '') {
+            $merchantEndpoint = sprintf(
+                '%s/merchants/%s/readers',
+                self::API_BASE_URL,
+                rawurlencode($merchantCode)
+            );
+
+            $merchantResponse = self::requestJson(
+                $merchantEndpoint,
+                $credential,
+                $authMethod,
+                'POST',
+                $payload,
+                [
+                    'merchant_code' => $merchantCode,
+                    'activation_code' => self::redactActivationCode($activationCode),
+                ]
+            );
+
+            if ($merchantResponse['status'] !== 404) {
+                return $merchantResponse;
+            }
+
+            $previousAttempts[] = self::summariseAttempt($merchantResponse);
+        }
+
+        $meActivateEndpoint = sprintf('%s/me/terminals/activate', self::API_BASE_URL);
+        $meActivateResponse = self::requestJson(
+            $meActivateEndpoint,
+            $credential,
+            $authMethod,
+            'POST',
+            $payload,
+            [
+                'activation_code' => self::redactActivationCode($activationCode),
+            ]
+        );
+
+        if ($meActivateResponse['status'] !== 404 || $authMethod !== 'api_key') {
+            return self::attachPreviousAttempts($meActivateResponse, $previousAttempts);
+        }
+
+        $previousAttempts[] = self::summariseAttempt($meActivateResponse);
+
+        $fallbackEndpoint = sprintf('%s/me/terminals', self::API_BASE_URL);
+        $fallbackResponse = self::requestJson(
+            $fallbackEndpoint,
+            $credential,
+            $authMethod,
+            'POST',
+            $payload,
+            [
+                'activation_code' => self::redactActivationCode($activationCode),
+                'note' => 'Fallback auf POST /me/terminals, da vorherige Aktivierungsaufrufe HTTP 404 geliefert haben.',
+            ]
+        );
+
+        return self::attachPreviousAttempts($fallbackResponse, $previousAttempts);
+    }
+
+    /**
      * Sends a payment request to the configured SumUp terminal.
      *
      * @param float       $amount       Amount in major units (e.g. Euros).
@@ -296,6 +399,25 @@ final class SumUpTerminalClient
         $end = substr($credential, -4);
 
         return sprintf('%s%s%s', $start, str_repeat('•', $length - 8), $end);
+    }
+
+    private static function normaliseActivationCode(string $code): string
+    {
+        $code = strtoupper(trim($code));
+        $code = preg_replace('/[^A-Z0-9]/', '', $code);
+
+        return $code ?? '';
+    }
+
+    private static function redactActivationCode(string $code): string
+    {
+        $length = strlen($code);
+
+        if ($length <= 4) {
+            return str_repeat('•', $length);
+        }
+
+        return substr($code, 0, 2) . str_repeat('•', max(0, $length - 4)) . substr($code, -2);
     }
 
     /**

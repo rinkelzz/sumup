@@ -871,6 +871,13 @@ if ($action === 'send_payment') {
                 </div>
             <?php endif; ?>
         <?php endif; ?>
+        <div class="alert info">
+            <strong>Terminal koppeln:</strong>
+            <p>
+                Dein Terminal zeigt nur dann im Dropdown, wenn es zuvor mit der SumUp-Cloud verknüpft wurde.
+                Nutze dafür <a href="terminal-verknuepfung.php">terminal-verknuepfung.php</a> und folge der Schritt-für-Schritt-Anleitung.
+            </p>
+        </div>
         <?php foreach ($configurationWarnings as $configurationWarning): ?>
             <div class="alert warning">
                 <strong>Konfiguration:</strong>

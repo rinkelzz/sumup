@@ -9,6 +9,7 @@ return [
         // Leave blank when you store the key via public/anmeldung.php. Use the secret key (prefix "sum_sk_").
         'api_key' => '',
         // Optional but recommended for API-key setups: SumUp merchant code (e.g. MCRNF79M) used for terminal discovery
+        // and for the activation helper (public/terminal-verknuepfung.php)
         'merchant_code' => '',
         // For OAuth set auth_method to "oauth" and place the access token below instead
         'access_token' => 'your-oauth-access-token-here',

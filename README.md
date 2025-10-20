@@ -52,6 +52,31 @@ Bleiben alle Aufrufe erfolglos, fehlt deinem Konto in der Regel die Freischaltun
 
 Nutze diese Übersicht, um neue Geräte schnell in `config/config.php` einzutragen oder um zu prüfen, ob ein Terminal für Cloud-Transaktionen freigeschaltet ist. Schlägt der Abruf fehl, zeigt die Oberfläche den HTTP-Status, die komplette API-Antwort und Hinweise zur Fehlerbehebung an (z. B. fehlende Berechtigungen oder inaktive Terminals).
 
+## Terminal erstmals mit der API verbinden
+
+Bevor ein SumUp-Solo- oder Air-Terminal Zahlungen aus der Cloud entgegennehmen kann, muss es einmalig mit deinem Händlerkonto gekoppelt werden. So funktioniert der Prozess:
+
+1. Öffne am Gerät das Menü **Einstellungen → Kassensystem verbinden** (Bezeichnung kann je nach Firmware leicht variieren) und melde dich vom Kassensystem ab, falls noch eine alte Verbindung aktiv ist.
+2. Wähle **Mit API verbinden**. Auf dem Display erscheint ein zeitlich begrenzter Aktivierungscode.
+3. Sende diesen Code an die Terminal-API. Das geht entweder direkt aus diesem Projekt über [`public/terminal-verknuepfung.php`](public/terminal-verknuepfung.php) oder per cURL, z. B.:
+
+   ```bash
+   curl -X POST \
+     "https://api.sumup.com/v0.1/merchants/MCRXXXX/readers" \
+     -H "Authorization: Bearer sum_sk_your-secret-key" \
+     -H "Content-Type: application/json" \
+     -d '{"activation_code":"AB12CD","label":"Tresen"}'
+   ```
+
+   Ersetze `MCRXXXX` durch deinen Händlercode (findest du im SumUp-Dashboard) und `sum_sk_…` durch deinen geheimen API-Key oder ein OAuth-Token. Das optionale `label` taucht später im Dashboard auf.
+4. Nach wenigen Sekunden bestätigt das Terminal die Kopplung und erscheint anschließend im API-Endpunkt [`GET /v0.1/merchants/{code}/readers`](https://developer.sumup.com/terminal-api). Trage die Seriennummer jetzt in `config/config.php` unter `sumup.terminals` ein oder lade sie direkt aus der Kassenoberfläche.
+
+Falls der Aufruf mit HTTP 404 oder 403 beantwortet wird:
+
+- Prüfe, ob das Terminal bereits einem anderen Händlerkonto zugeordnet ist oder ob der Aktivierungscode noch gültig ist (Codes verfallen nach einigen Minuten).
+- Stelle sicher, dass dein Konto für Cloud-Integrationen freigeschaltet ist. Ohne Freischaltung schlägt die Aktivierung trotz korrektem Code fehl – wende dich an den SumUp-Support.
+- Bei API-Key-Nutzung ohne Händlercode weicht die Anwendung auf `/me/…`-Endpunkte aus. Hinterlege daher deinen Händlercode, damit der oben gezeigte Aufruf funktioniert.
+
 ## Authentifizierung bei SumUp
 
 SumUp unterstützt für den Terminal-API-Zugriff zwei Verfahren:
