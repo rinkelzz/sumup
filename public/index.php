@@ -124,6 +124,7 @@ $secureStoreConfig = $config['secure_store'] ?? [];
 $credentialStore = null;
 $secureStoreError = null;
 $storedCredentialDetails = null;
+$credentialError = null;
 
 if (isset($secureStoreConfig['credential_file'], $secureStoreConfig['key_file'])) {
     try {
@@ -174,16 +175,14 @@ if ($authMethod === 'api_key' && $apiKey === '' && $storedCredentialDetails !== 
 
 if ($credential === '') {
     if ($authMethod === 'oauth') {
-        renderFatalError('Kein OAuth Access Token konfiguriert. Bitte ergänzen Sie config/config.php.');
+        $credentialError = 'Kein OAuth Access Token konfiguriert. Bitte ergänzen Sie config/config.php.';
+    } else {
+        $credentialError = 'Kein SumUp API-Key konfiguriert. Bitte ergänzen Sie config/config.php.';
+
+        if ($credentialStore instanceof CredentialStore) {
+            $credentialError .= ' Alternativ können Sie Ihren Schlüssel über anmeldung.php sicher hinterlegen.';
+        }
     }
-
-    $hint = 'Kein SumUp API-Key konfiguriert. Bitte ergänzen Sie config/config.php.';
-
-    if ($credentialStore instanceof CredentialStore) {
-        $hint .= ' Alternativ können Sie Ihren Schlüssel über anmeldung.php sicher hinterlegen.';
-    }
-
-    renderFatalError($hint);
 }
 
 if ($authMethod === 'api_key' && $credential !== '' && str_starts_with($credential, 'sum_pk_')) {
@@ -367,217 +366,82 @@ function writeTransactionLog(
     return file_put_contents($logFile, $line, FILE_APPEND | LOCK_EX) !== false;
 }
 
-if ($action === 'discover_terminals') {
-    try {
-        $response = SumUpTerminalClient::listTerminals($credential, $authMethod, $merchantCode);
-
-        $terminalDiscoveryDebug = [
-            'http_status' => $response['status'],
-            'response' => $response['body'],
-        ];
-
-        if (isset($response['request'])) {
-            $terminalDiscoveryDebug['request'] = $response['request'];
-        }
-
-        if (isset($response['response_raw'])) {
-            $terminalDiscoveryDebug['response_raw'] = $response['response_raw'];
-        }
-
-        if ($response['status'] >= 200 && $response['status'] < 300) {
-            $items = [];
-            $body = $response['body'];
-
-            if (isset($body['items']) && is_array($body['items'])) {
-                $items = $body['items'];
-            } elseif (isset($body['terminal']) && is_array($body['terminal'])) {
-                $items = [$body['terminal']];
-            }
-
-            $terminals = [];
-
-            foreach ($items as $item) {
-                if (!is_array($item)) {
-                    continue;
-                }
-
-                $serial = '';
-                if (isset($item['serial_number'])) {
-                    $serial = trim((string) $item['serial_number']);
-                } elseif (isset($item['serial'])) {
-                    $serial = trim((string) $item['serial']);
-                }
-
-                if ($serial === '') {
-                    continue;
-                }
-
-                $label = '';
-                if (isset($item['label'])) {
-                    $label = trim((string) $item['label']);
-                }
-
-                $model = '';
-                if (isset($item['model'])) {
-                    $model = trim((string) $item['model']);
-                } elseif (isset($item['device_type'])) {
-                    $model = trim((string) $item['device_type']);
-                }
-
-                $status = '';
-                if (isset($item['status'])) {
-                    $status = trim((string) $item['status']);
-                } elseif (isset($item['state'])) {
-                    $status = trim((string) $item['state']);
-                }
-
-                $terminals[] = [
-                    'serial' => $serial,
-                    'label' => $label !== '' ? $label : $serial,
-                    'model' => $model,
-                    'status' => $status,
-                ];
-            }
-
-            $count = count($terminals);
-            $message = $count === 0
-                ? 'Keine Terminals gefunden. Prüfen Sie, ob die Geräte im SumUp-Dashboard dem Konto zugeordnet sind.'
-                : sprintf('%d Terminal%s gefunden.', $count, $count === 1 ? '' : 's');
-
-            if ($count === 0) {
-                $terminalDiscoveryHints[] = 'Kontrollieren Sie im SumUp-Dashboard unter „Terminals“, ob Geräte mit Ihrem Händlerkonto verknüpft sind und Cloud-Transaktionen unterstützen.';
-            }
-
-            $terminalDiscoveryResult = [
-                'title' => 'Terminal-Liste abgerufen',
-                'message' => $message,
-                'items' => $terminals,
-            ];
-        } else {
-            $terminalDiscoveryError = sprintf(
-                'Abruf der Terminals fehlgeschlagen (HTTP %d).',
-                $response['status']
-            );
-
-            if ($response['status'] === 401 || $response['status'] === 403) {
-                $terminalDiscoveryHints[] = 'Die SumUp-API lehnt den Zugriff ab. Prüfen Sie API-Key oder OAuth-Token sowie deren Berechtigungen.';
-            }
-
-            if ($response['status'] === 404) {
-                $terminalDiscoveryHints[] = 'SumUp meldet „Not Found“. Stellen Sie sicher, dass Terminal Cloud Requests für Ihr Händlerkonto freigeschaltet sind.';
-
-                if ($authMethod === 'api_key') {
-                    $terminalDiscoveryHints[] = 'Beim Einsatz von API-Keys liefert SumUp diesen Fehler häufig, wenn die Händlerfreischaltung für die Terminal-API fehlt. Kontaktiere den SumUp-Support oder wechsle auf OAuth mit dem Scope „transactions.terminal“.';
-                } else {
-                    $terminalDiscoveryHints[] = 'Prüfen Sie, ob das verwendete OAuth-Token noch gültig ist und den Scope „transactions.terminal“ enthält.';
-                }
-            }
-        }
-    } catch (Throwable $exception) {
-        $terminalDiscoveryError = $exception->getMessage();
-    }
-}
-
-if ($action === 'send_payment') {
-    $amount = isset($_POST['amount']) ? (float) str_replace(',', '.', (string) $_POST['amount']) : 0.0;
-    $tipAmount = isset($_POST['tip_amount']) && $_POST['tip_amount'] !== ''
-        ? (float) str_replace(',', '.', (string) $_POST['tip_amount'])
-        : null;
-    $description = isset($_POST['description']) ? trim((string) $_POST['description']) : null;
-    $requestedTerminalSerial = isset($_POST['terminal_serial']) ? trim((string) $_POST['terminal_serial']) : '';
-    $externalId = sprintf('web-%s', bin2hex(random_bytes(4)));
-
-    $paymentSuccessful = false;
-
-    if ($terminalOptions === []) {
-        $error = 'Es ist kein SumUp-Terminal konfiguriert.';
-    } elseif ($requestedTerminalSerial !== '') {
-        if (array_key_exists($requestedTerminalSerial, $terminalLookup)) {
-            $selectedTerminalSerial = $requestedTerminalSerial;
-            $selectedTerminalLabel = $terminalLookup[$requestedTerminalSerial];
-        } else {
-            $error = 'Ausgewähltes Terminal ist ungültig oder nicht konfiguriert.';
-        }
-    } elseif (count($terminalOptions) > 1) {
-        $error = 'Bitte wählen Sie ein Terminal aus.';
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    if ($credentialError !== null) {
+        $error = $credentialError;
     }
 
-    if ($error === null && $environmentErrors === []) {
-        try {
-            $client = new SumUpTerminalClient($credential, $selectedTerminalSerial, $authMethod);
-            $response = $client->sendPayment($amount, $currency, $externalId, $description, $tipAmount);
+    if ($credentialError === null) {
+        $amount = isset($_POST['amount']) ? (float) str_replace(',', '.', (string) $_POST['amount']) : 0.0;
+        $tipAmount = isset($_POST['tip_amount']) && $_POST['tip_amount'] !== ''
+            ? (float) str_replace(',', '.', (string) $_POST['tip_amount'])
+            : null;
+        $description = isset($_POST['description']) ? trim((string) $_POST['description']) : null;
+        $requestedTerminalSerial = isset($_POST['terminal_serial']) ? trim((string) $_POST['terminal_serial']) : '';
+        $externalId = sprintf('web-%s', bin2hex(random_bytes(4)));
 
-            $debugDetails = [
-                'http_status' => $response['status'],
-                'response' => $response['body'],
-            ];
+        $paymentSuccessful = false;
 
-            if (isset($response['request'])) {
-                $debugDetails['request'] = $response['request'];
-            }
-
-            if (isset($response['response_raw'])) {
-                $debugDetails['response_raw'] = $response['response_raw'];
-            }
-
-            $debugHints = [];
-
-            if ($response['status'] >= 200 && $response['status'] < 300) {
-                $paymentSuccessful = true;
-                $terminalDisplayName = $selectedTerminalLabel !== '' ? $selectedTerminalLabel : $selectedTerminalSerial;
-                $result = [
-                    'title' => 'Zahlungsanforderung gesendet',
-                    'message' => $terminalDisplayName !== ''
-                        ? sprintf(
-                            'Der Betrag wurde an das Terminal "%s" übertragen. Warten Sie auf die Bestätigung auf dem Gerät.',
-                            $terminalDisplayName
-                        )
-                        : 'Der Betrag wurde an das Terminal übertragen. Warten Sie auf die Bestätigung auf dem Gerät.',
-                    'details' => $debugDetails,
-                    'hints' => $debugHints,
-                ];
+        if ($terminalOptions === []) {
+            $error = 'Es ist kein SumUp-Terminal konfiguriert.';
+        } elseif ($requestedTerminalSerial !== '') {
+            if (array_key_exists($requestedTerminalSerial, $terminalOptions)) {
+                $selectedTerminalSerial = $requestedTerminalSerial;
+                $selectedTerminalLabel = $terminalOptions[$requestedTerminalSerial];
             } else {
-                $error = sprintf(
-                    'Fehler beim Senden der Zahlungsanforderung (HTTP %d).',
-                    $response['status']
-                );
-
-                if ($response['status'] === 404) {
-                    $debugHints[] = 'SumUp meldet "Not Found". Prüfen Sie, ob die eingetragene Terminal-Seriennummer exakt mit dem Aufkleber unter dem Gerät übereinstimmt.';
-                    $debugHints[] = 'Stellen Sie sicher, dass das Terminal für Cloud-/Solo-Transaktionen freigeschaltet ist und mit demselben Händlerkonto verbunden wurde, das den API-Key erzeugt hat.';
-                    $debugHints[] = 'Kontrollieren Sie, ob das Terminal zuletzt online war. Inaktive oder abgemeldete Geräte akzeptieren keine Zahlungsanforderungen.';
-                }
-
-                if ($response['status'] === 401 || $response['status'] === 403) {
-                    $debugHints[] = 'Der SumUp-Server lehnt die Authentifizierung ab. Prüfen Sie API-Key bzw. OAuth-Token und deren Berechtigungen.';
-                }
-
-                if (!empty($debugHints)) {
-                    $error .= ' Bitte beachten Sie die Hinweise zur Fehlersuche weiter unten.';
-                }
-
-                $result = [
-                    'title' => 'Antwort des SumUp-Servers',
-                    'details' => $debugDetails,
-                    'hints' => $debugHints,
-                ];
+                $error = 'Ausgewähltes Terminal ist ungültig oder nicht konfiguriert.';
             }
-        } catch (Throwable $exception) {
-            $error = $exception->getMessage();
+        } elseif (count($terminalOptions) > 1) {
+            $error = 'Bitte wählen Sie ein Terminal aus.';
+        }
+
+        if ($error === null && $environmentErrors === []) {
+            try {
+                $client = new SumUpTerminalClient($credential, $selectedTerminalSerial, $authMethod);
+                $response = $client->sendPayment($amount, $currency, $externalId, $description, $tipAmount);
+
+                if ($response['status'] >= 200 && $response['status'] < 300) {
+                    $paymentSuccessful = true;
+                    $terminalDisplayName = $selectedTerminalLabel !== '' ? $selectedTerminalLabel : $selectedTerminalSerial;
+                    $result = [
+                        'title' => 'Zahlungsanforderung gesendet',
+                        'message' => $terminalDisplayName !== ''
+                            ? sprintf(
+                                'Der Betrag wurde an das Terminal "%s" übertragen. Warten Sie auf die Bestätigung auf dem Gerät.',
+                                $terminalDisplayName
+                            )
+                            : 'Der Betrag wurde an das Terminal übertragen. Warten Sie auf die Bestätigung auf dem Gerät.',
+                        'details' => $response['body'],
+                    ];
+                } else {
+                    $error = sprintf(
+                        'Fehler beim Senden der Zahlungsanforderung (HTTP %d).',
+                        $response['status']
+                    );
+                    $result = [
+                        'title' => 'Antwort des SumUp-Servers',
+                        'details' => $response['body'],
+                    ];
+                }
+            } catch (Throwable $exception) {
+                $error = $exception->getMessage();
+            }
+        }
+
+        if (!writeTransactionLog(
+            $transactionsLogFile,
+            $username,
+            $amount,
+            $paymentSuccessful,
+            $selectedTerminalSerial,
+            $selectedTerminalLabel
+        )) {
+            $logError = 'Transaktionsprotokoll konnte nicht geschrieben werden. Bitte überprüfen Sie die Schreibrechte.';
         }
     }
-
-    if (!writeTransactionLog(
-        $transactionsLogFile,
-        $username,
-        $amount,
-        $paymentSuccessful,
-        $selectedTerminalSerial,
-        $selectedTerminalLabel
-    )) {
-        $logError = 'Transaktionsprotokoll konnte nicht geschrieben werden. Bitte überprüfen Sie die Schreibrechte.';
-    }
 }
+
+$formDisabled = $terminalOptions === [] || $environmentErrors !== [] || $credentialError !== null;
 ?>
 <!DOCTYPE html>
 <html lang="de">
@@ -892,6 +756,13 @@ if ($action === 'send_payment') {
             </div>
         <?php endforeach; ?>
 
+        <?php if ($credentialError !== null): ?>
+            <div class="alert error">
+                <strong>Zugriffsdaten fehlen:</strong>
+                <div><?= htmlspecialchars($credentialError, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') ?></div>
+            </div>
+        <?php endif; ?>
+
         <?php foreach ($environmentErrors as $envError): ?>
             <div class="alert error">
                 <strong>Systemvoraussetzung:</strong>
@@ -992,9 +863,8 @@ if ($action === 'send_payment') {
             <?php else: ?>
                 <label>
                     Terminal
-                    <select name="terminal_serial">
-                        <?php foreach ($terminalOptions as $option): ?>
-                            <?php $serial = $option['serial']; ?>
+                    <select name="terminal_serial"<?= $formDisabled ? ' disabled' : '' ?>>
+                        <?php foreach ($terminalOptions as $serial => $label): ?>
                             <option value="<?= htmlspecialchars($serial, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') ?>"<?= $serial === $selectedTerminalSerial ? ' selected' : '' ?>>
                                 <?= htmlspecialchars($option['label'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') ?>
                             </option>
@@ -1033,7 +903,7 @@ if ($action === 'send_payment') {
                 <textarea name="description" placeholder="Referenz oder Notiz"><?= isset($_POST['description']) ? htmlspecialchars((string) $_POST['description'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') : '' ?></textarea>
             </label>
 
-            <button type="submit"<?= $terminalOptions === [] || $environmentErrors !== [] ? ' disabled' : '' ?>>An Terminal senden</button>
+            <button type="submit"<?= $formDisabled ? ' disabled' : '' ?>>An Terminal senden</button>
         </form>
 
         <?php if ($result !== null): ?>

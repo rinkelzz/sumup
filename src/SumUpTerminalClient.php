@@ -326,6 +326,34 @@ final class SumUpTerminalClient
     }
 
     /**
+     * Activates the configured terminal using the provided activation code.
+     *
+     * @param string $activationCode Activation code displayed on the terminal.
+     *
+     * @return array{status:int, body:array<string,mixed>}
+     */
+    public function activateTerminal(string $activationCode): array
+    {
+        $activationCode = trim($activationCode);
+
+        if ($activationCode === '') {
+            throw new RuntimeException('Activation code must not be empty.');
+        }
+
+        $payload = [
+            'activation_code' => $activationCode,
+        ];
+
+        $endpoint = sprintf(
+            '%s/terminals/%s/activation',
+            self::API_BASE_URL,
+            rawurlencode($this->terminalSerial)
+        );
+
+        return $this->postJson($endpoint, $payload);
+    }
+
+    /**
      * @param array<string,mixed> $payload
      * @return array{status:int, body:array<string,mixed>}
      */
