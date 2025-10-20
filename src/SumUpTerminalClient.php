@@ -10,14 +10,22 @@ final class SumUpTerminalClient
 {
     private const API_BASE_URL = 'https://api.sumup.com/v0.1';
 
-    public function __construct(
-        private readonly string $credential,
-        private readonly string $terminalSerial,
-        private readonly string $authMethod = 'api_key'
-    ) {
-        if (!in_array($this->authMethod, ['api_key', 'oauth'], true)) {
+    private string $credential;
+
+    private string $terminalSerial;
+
+    private string $authMethod;
+
+    public function __construct(string $credential, string $terminalSerial, string $authMethod = 'api_key')
+    {
+        $authMethod = strtolower($authMethod);
+
+        if (!in_array($authMethod, ['api_key', 'oauth'], true)) {
             throw new RuntimeException('Unsupported SumUp authentication method.');
         }
+
+        $credential = trim($credential);
+        $terminalSerial = trim($terminalSerial);
 
         if ($credential === '') {
             throw new RuntimeException('Missing SumUp credentials.');
@@ -26,6 +34,10 @@ final class SumUpTerminalClient
         if ($terminalSerial === '') {
             throw new RuntimeException('Missing SumUp terminal serial number.');
         }
+
+        $this->credential = $credential;
+        $this->terminalSerial = $terminalSerial;
+        $this->authMethod = $authMethod;
     }
 
     /**
@@ -70,6 +82,34 @@ final class SumUpTerminalClient
 
         $endpoint = sprintf(
             '%s/terminals/%s/transactions',
+            self::API_BASE_URL,
+            rawurlencode($this->terminalSerial)
+        );
+
+        return $this->postJson($endpoint, $payload);
+    }
+
+    /**
+     * Activates the configured terminal using the provided activation code.
+     *
+     * @param string $activationCode Activation code displayed on the terminal.
+     *
+     * @return array{status:int, body:array<string,mixed>}
+     */
+    public function activateTerminal(string $activationCode): array
+    {
+        $activationCode = trim($activationCode);
+
+        if ($activationCode === '') {
+            throw new RuntimeException('Activation code must not be empty.');
+        }
+
+        $payload = [
+            'activation_code' => $activationCode,
+        ];
+
+        $endpoint = sprintf(
+            '%s/terminals/%s/activation',
             self::API_BASE_URL,
             rawurlencode($this->terminalSerial)
         );
