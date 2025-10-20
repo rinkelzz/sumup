@@ -8,10 +8,10 @@ return [
         'auth_method' => 'api_key', // allowed values: api_key, oauth
         // Leave blank when you store the key via public/anmeldung.php. Use the secret key (prefix "sum_sk_").
         'api_key' => '',
+        // Optional but recommended for API-key setups: SumUp merchant code (e.g. MCRNF79M) used for terminal discovery
+        'merchant_code' => '',
         // For OAuth set auth_method to "oauth" and place the access token below instead
         'access_token' => 'your-oauth-access-token-here',
-        // Required merchant code of your SumUp account (visible in the SumUp dashboard URL, e.g. DE1234)
-        'merchant_code' => 'YOUR-MERCHANT-CODE',
         // Default currency in ISO 4217 format
         'currency' => 'EUR',
         // Configure one or multiple SumUp terminals that can receive payments from the web UI

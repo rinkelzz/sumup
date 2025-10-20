@@ -29,7 +29,8 @@ final class CredentialStore
     }
 
     /**
-     * @return array{merchant_code: string, merchant_id: string, api_key: string, updated_at?: string}|null
+     * @return array{merchant_id: string, api_key: string, updated_at?: string}|null
+     *     `merchant_id` enthält optional den Händlercode (z. B. MCRNF79M) für Terminalabfragen.
      */
     public function getApiCredential(): ?array
     {
@@ -53,17 +54,8 @@ final class CredentialStore
             return null;
         }
 
-        $merchantCode = '';
-
-        if (isset($data['merchant_code'])) {
-            $merchantCode = (string) $data['merchant_code'];
-        } elseif (isset($data['merchant_id'])) {
-            $merchantCode = (string) $data['merchant_id'];
-        }
-
         $result = [
-            'merchant_code' => $merchantCode,
-            'merchant_id' => isset($data['merchant_id']) ? (string) $data['merchant_id'] : $merchantCode,
+            'merchant_id' => isset($data['merchant_id']) ? (string) $data['merchant_id'] : '',
             'api_key' => $apiKey,
         ];
 
@@ -74,14 +66,10 @@ final class CredentialStore
         return $result;
     }
 
-    public function saveApiKey(string $merchantCode, string $apiKey): void
+    public function saveApiKey(string $merchantId, string $apiKey): void
     {
-        $merchantCode = trim($merchantCode);
+        $merchantId = trim($merchantId);
         $apiKey = trim($apiKey);
-
-        if ($merchantCode === '') {
-            throw new RuntimeException('Merchant-Code darf nicht leer sein.');
-        }
 
         if ($apiKey === '') {
             throw new RuntimeException('API-Key darf nicht leer sein.');
@@ -96,8 +84,7 @@ final class CredentialStore
         $ciphertext = sodium_crypto_secretbox($apiKey, $nonce, $key);
 
         $payload = [
-            'merchant_code' => $merchantCode,
-            'merchant_id' => $merchantCode,
+            'merchant_id' => $merchantId,
             'nonce' => base64_encode($nonce),
             'ciphertext' => base64_encode($ciphertext),
             'updated_at' => (new \DateTimeImmutable('now'))->format('c'),

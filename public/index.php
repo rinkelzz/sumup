@@ -104,8 +104,6 @@ foreach (['auth', 'log', 'secure_store'] as $section) {
  *         auth_method?: string,
  *         access_token?: string,
  *         api_key?: string,
- *         merchant_code?: string,
- *         merchant_id?: string,
  *         currency?: string,
  *         terminal_serial?: string,
  *         terminal_label?: string,
@@ -152,40 +150,26 @@ if ($credentialStore instanceof CredentialStore) {
     $storedCredentialDetails = $credentialStore->getApiCredential();
 }
 
+$merchantCode = '';
+
+if (isset($sumUpConfig['merchant_code'])) {
+    $merchantCode = (string) $sumUpConfig['merchant_code'];
+} elseif (isset($sumUpConfig['merchant_id'])) {
+    // legacy naming support
+    $merchantCode = (string) $sumUpConfig['merchant_id'];
+}
+
+if ($merchantCode === '' && $storedCredentialDetails !== null && isset($storedCredentialDetails['merchant_id'])) {
+    $merchantCode = $storedCredentialDetails['merchant_id'];
+}
+
+$merchantCode = trim($merchantCode);
+
 $configurationWarnings = [];
 
 if ($authMethod === 'api_key' && $apiKey === '' && $storedCredentialDetails !== null) {
     $apiKey = $storedCredentialDetails['api_key'];
     $credential = $apiKey;
-}
-
-$merchantCodeSource = 'config';
-$merchantCode = trim((string) ($sumUpConfig['merchant_code'] ?? ''));
-
-if ($merchantCode === '') {
-    $merchantCodeSource = 'missing';
-}
-
-if ($merchantCode === '' && isset($sumUpConfig['merchant_id'])) {
-    $merchantCode = trim((string) $sumUpConfig['merchant_id']);
-
-    if ($merchantCode !== '') {
-        $merchantCodeSource = 'legacy_config';
-    }
-}
-
-if ($merchantCode === '' && $storedCredentialDetails !== null) {
-    if (isset($storedCredentialDetails['merchant_code'])) {
-        $merchantCode = trim((string) $storedCredentialDetails['merchant_code']);
-        if ($merchantCode !== '') {
-            $merchantCodeSource = 'secure_store';
-        }
-    } elseif (isset($storedCredentialDetails['merchant_id'])) {
-        $merchantCode = trim((string) $storedCredentialDetails['merchant_id']);
-        if ($merchantCode !== '') {
-            $merchantCodeSource = 'secure_store_legacy';
-        }
-    }
 }
 
 if ($credential === '') {
@@ -206,17 +190,11 @@ if ($authMethod === 'api_key' && $credential !== '' && str_starts_with($credenti
     $configurationWarnings[] = 'Der eingetragene SumUp-Schlüssel beginnt mit "sum_pk_". Für Terminal-Aufrufe benötigen Sie den geheimen Schlüssel mit dem Präfix "sum_sk_" (Personal Access Token).';
 }
 
-if ($merchantCode === '') {
-    renderFatalError('Kein SumUp Merchant-Code konfiguriert. Bitte ergänzen Sie "sumup.merchant_code" in config/config.php oder tragen Sie den Code über anmeldung.php ein.');
+if ($authMethod === 'api_key' && $merchantCode === '') {
+    $configurationWarnings[] = 'Für die Terminalsuche hinterlegen Sie Ihren Händlercode (z. B. MCRNF79M) in config/config.php oder auf anmeldung.php.';
 }
 
-if ($merchantCodeSource === 'legacy_config') {
-    $configurationWarnings[] = 'Der Merchant-Code wird derzeit aus dem veralteten Feld "sumup.merchant_id" geladen. Bitte tragen Sie ihn künftig unter "sumup.merchant_code" ein.';
-}
-
-if (in_array($merchantCodeSource, ['secure_store', 'secure_store_legacy'], true) && trim((string) ($sumUpConfig['merchant_code'] ?? '')) === '') {
-    $configurationWarnings[] = 'Der Merchant-Code wurde aus der sicheren Ablage übernommen. Tragen Sie ihn zusätzlich in config/config.php ein, falls Sie mehrere Händlerkonten verwenden möchten.';
-}
+$configurationWarnings = array_values(array_unique($configurationWarnings));
 
 $defaultTerminalSerial = (string) ($sumUpConfig['terminal_serial'] ?? '');
 $defaultTerminalLabel = (string) ($sumUpConfig['terminal_label'] ?? '');
@@ -526,7 +504,7 @@ if ($action === 'send_payment') {
 
     if ($error === null && $environmentErrors === []) {
         try {
-            $client = new SumUpTerminalClient($credential, $selectedTerminalSerial, $authMethod, $merchantCode);
+            $client = new SumUpTerminalClient($credential, $selectedTerminalSerial, $authMethod);
             $response = $client->sendPayment($amount, $currency, $externalId, $description, $tipAmount);
 
             $debugDetails = [
@@ -875,8 +853,8 @@ if ($action === 'send_payment') {
                 <div class="alert info">
                     <strong>API-Key geladen</strong>
                     <p>
-                        Der hinterlegte Schlüssel<?= $storedCredentialDetails['merchant_code'] !== ''
-                            ? ' für ' . htmlspecialchars($storedCredentialDetails['merchant_code'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8')
+                        Der hinterlegte Schlüssel<?= $storedCredentialDetails['merchant_id'] !== ''
+                            ? ' für ' . htmlspecialchars($storedCredentialDetails['merchant_id'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8')
                             : '' ?> wurde automatisch verwendet.
                         <?php if (isset($storedCredentialDetails['updated_at']) && $storedCredentialDetails['updated_at'] !== ''): ?>
                             <br>

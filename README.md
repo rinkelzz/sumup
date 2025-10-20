@@ -8,14 +8,13 @@ Dieses Projekt stellt eine einfache PHP-Weboberfläche bereit, mit der du den Re
 - PHP-Erweiterung [libsodium](https://www.php.net/manual/de/book.sodium.php) für die verschlüsselte Schlüsselablage
 - Ein SumUp-Terminal mit WLAN-Verbindung
 - Ein SumUp **Terminal API** API-Key **oder** OAuth-Access-Token
-- Den Merchant-Code (Händlercode) deines SumUp-Kontos
 - Die Seriennummer(n) der Terminals, die Zahlungen entgegennehmen sollen
 
 ## Konfiguration
 
 1. Kopiere die Datei `config/config.example.php` nach `config/config.php`.
 2. Lege fest, ob du dich mit einem API-Key (`auth_method = "api_key"`) oder einem OAuth-Token (`auth_method = "oauth"`) authentifizieren möchtest. Wenn du den API-Key nicht direkt in der Konfigurationsdatei speichern willst, lasse das Feld `api_key` leer und hinterlege den Schlüssel später sicher über `public/anmeldung.php`.
-3. Trage deinen Merchant-Code unter `sumup.merchant_code` ein. Du findest ihn im SumUp-Dashboard (Teil der URL nach dem Login, z. B. `DE1234`). Ohne korrekten Merchant-Code antworten die Terminal-Endpunkte mit HTTP 404.
+3. Wenn du einen API-Key verwendest, hinterlege zusätzlich deinen Händlercode (`sumup.merchant_code`). Er hat das Format `MCRxxxxx` und erscheint in deinem Händler-Dashboard; die Terminalsuche benötigt ihn, um den Endpoint `GET /v0.1/merchants/{code}/readers` aufzurufen.
 4. Trage deine SumUp-Terminals unter `sumup.terminals` ein. Erlaubte Formate:
    - Einzelne Seriennummer als String, z. B. `'ABCDEF123456'`.
    - Numerisches Array von Objekten mit `serial` und optional `label` (wie im Beispiel).
@@ -36,7 +35,7 @@ Dieses Projekt stellt eine einfache PHP-Weboberfläche bereit, mit der du den Re
 Anstatt den SumUp-API-Key in `config/config.php` abzulegen, kannst du ihn nach der Einrichtung über `http://localhost:8000/anmeldung.php` sicher hinterlegen:
 
 1. Melde dich mit den in der Konfiguration hinterlegten Zugangsdaten (HTTP Basic Auth) an.
-2. Trage deinen Merchant-Code (z. B. `DE1234`) und den SumUp-API-Key ein. Beide Angaben sind erforderlich, damit die Terminal-API deine Anfragen deinem Händlerkonto zuordnen kann.
+2. Trage optional deinen Händlercode (z. B. `MCRNF79M`) ein und füge den SumUp-API-Key ein.
 3. Nach dem Speichern verschlüsselt die Anwendung den Schlüssel mit der PHP-Erweiterung **libsodium** (`sodium`) und legt ihn in `var/sumup_credentials.json` ab; der dazugehörige Schlüssel liegt in `var/secure_store.key`.
 4. Kehre zur Kasse (`index.php`) zurück. Die Anwendung lädt den Schlüssel automatisch und zeigt an, wann er zuletzt aktualisiert wurde.
 
@@ -44,9 +43,12 @@ Zum Löschen des gespeicherten API-Keys nutze die entsprechende Schaltfläche in
 
 ## Terminals automatisch abrufen
 
-Sobald ein gültiger API-Key oder ein OAuth-Access-Token hinterlegt ist, kannst du in der Kassenoberfläche auf **„Terminals aus SumUp laden“** klicken. Die Anwendung ruft dann den Endpoint [`GET /v0.1/me/terminals`](https://developer.sumup.com/terminal-api) (inklusive deines `merchant_code` als Query-Parameter) auf und listet alle dem Händlerkonto zugeordneten Geräte inklusive Seriennummer, optionalem Label, Modell und Status auf.
+Sobald ein gültiger API-Key oder ein OAuth-Access-Token hinterlegt ist, kannst du in der Kassenoberfläche auf **„Terminals aus SumUp laden“** klicken. Die Anwendung ruft dann – abhängig von der Authentifizierung – die passende Terminal-API auf und listet alle Geräte inklusive Seriennummer, optionalem Label, Modell und Status auf.
 
-Einige Händlerkonten (insbesondere bei Nutzung eines Personal Access Tokens) liefern auf `GET /v0.1/me/terminals` aktuell einen HTTP-Status 404. In diesem Fall versucht die Anwendung automatisch den alternativen Legacy-Endpoint `GET /v0.1/me/merchant-terminals`. Bleiben beide Aufrufe erfolglos, fehlt deinem Konto in der Regel die Freischaltung für Terminal-Cloud-Anfragen – wende dich an den SumUp-Support oder wechsle auf ein OAuth-Setup mit dem Scope `transactions.terminal`.
+- **API-Key**: Mit hinterlegtem Händlercode (`sumup.merchant_code` oder Eintrag in `anmeldung.php`) startet der Abruf bei [`GET /v0.1/merchants/{code}/readers`](https://developer.sumup.com/terminal-api). Sollte SumUp dort mit HTTP 404 antworten, folgen automatisch die Endpoints `GET /v0.1/me/terminals` und schließlich `GET /v0.1/me/merchant-terminals`; die vorherigen Versuche erscheinen in den Debug-Daten der Oberfläche.
+- **OAuth**: Hier genügt weiterhin [`GET /v0.1/me/terminals`](https://developer.sumup.com/terminal-api).
+
+Bleiben alle Aufrufe erfolglos, fehlt deinem Konto in der Regel die Freischaltung für Terminal-Cloud-Anfragen – wende dich an den SumUp-Support oder wechsle auf ein OAuth-Setup mit dem Scope `transactions.terminal`.
 
 Nutze diese Übersicht, um neue Geräte schnell in `config/config.php` einzutragen oder um zu prüfen, ob ein Terminal für Cloud-Transaktionen freigeschaltet ist. Schlägt der Abruf fehl, zeigt die Oberfläche den HTTP-Status, die komplette API-Antwort und Hinweise zur Fehlerbehebung an (z. B. fehlende Berechtigungen oder inaktive Terminals).
 
@@ -96,7 +98,7 @@ Jeder Zahlungsversuch wird mit Zeitpunkt, angemeldetem Nutzer, ausgewähltem Ter
 
 - Bei API-Fehlern wird der HTTP-Statuscode sowie die Antwort von SumUp im Bereich „Antwortdetails“ angezeigt.
 - Prüfe bei Authentifizierungsfehlern dein Access Token und dessen Berechtigungen.
-- Bei HTTP-404-Antworten: Kontrolliere, ob die Seriennummer exakt mit der Anzeige im Händler-Dashboard übereinstimmt, ob der richtige `merchant_code` übergeben wird und ob das Terminal dem Konto zugeordnet sowie für Cloud-Transaktionen freigeschaltet ist.
+- Bei HTTP-404-Antworten: Kontrolliere, ob die Seriennummer exakt mit der Anzeige im Händler-Dashboard übereinstimmt und ob das Terminal dem Konto zugeordnet sowie für Cloud-Transaktionen freigeschaltet ist.
 - Erscheint nach dem Absenden lediglich eine weiße Seite, fehlt meist die PHP-Extension `curl`. Installiere sie auf deinem Server (unter Debian/Ubuntu z. B. `sudo apt install php-curl`) und starte PHP danach neu.
 
 ## Sicherheitshinweise

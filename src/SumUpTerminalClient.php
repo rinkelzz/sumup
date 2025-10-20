@@ -13,22 +13,19 @@ final class SumUpTerminalClient
     public function __construct(
         private readonly string $credential,
         private readonly string $terminalSerial,
-        private readonly string $authMethod = 'api_key',
-        private readonly string $merchantCode = ''
+        private readonly string $authMethod = 'api_key'
     ) {
         self::assertCredential($credential, $this->authMethod);
 
         if ($terminalSerial === '') {
             throw new RuntimeException('Missing SumUp terminal serial number.');
         }
-
-        if ($this->merchantCode === '') {
-            throw new RuntimeException('Missing SumUp merchant code.');
-        }
     }
 
     /**
      * Retrieves the list of terminals available for the authenticated merchant account.
+     *
+     * @param string|null $merchantCode Optional merchant code (e.g. "MCRNF79M") used by API-key discovery.
      *
      * @return array{
      *     status:int,
@@ -41,73 +38,64 @@ final class SumUpTerminalClient
         string $credential,
         string $authMethod = 'api_key',
         ?string $merchantCode = null
-    ): array
-    {
+    ): array {
         self::assertCredential($credential, $authMethod);
 
-        $merchantCode = trim((string) $merchantCode);
+        $merchantCode = $merchantCode !== null ? trim($merchantCode) : '';
+        $previousAttempts = [];
 
-        if ($merchantCode === '') {
-            throw new RuntimeException('Missing SumUp merchant code.');
+        if ($authMethod === 'api_key' && $merchantCode !== '') {
+            $readersEndpoint = sprintf(
+                '%s/merchants/%s/readers?limit=200',
+                self::API_BASE_URL,
+                rawurlencode($merchantCode)
+            );
+
+            $readersResponse = self::requestJson(
+                $readersEndpoint,
+                $credential,
+                $authMethod,
+                'GET',
+                null,
+                [
+                    'merchant_code' => $merchantCode,
+                ]
+            );
+
+            if ($readersResponse['status'] !== 404) {
+                return $readersResponse;
+            }
+
+            $previousAttempts[] = self::summariseAttempt($readersResponse);
         }
 
-        $primaryEndpoint = sprintf(
-            '%s/me/terminals?limit=200&merchant_code=%s',
-            self::API_BASE_URL,
-            rawurlencode($merchantCode)
-        );
+        $primaryEndpoint = sprintf('%s/me/terminals?limit=200', self::API_BASE_URL);
         $primaryResponse = self::requestJson(
             $primaryEndpoint,
             $credential,
             $authMethod,
-            'GET',
-            null,
-            [
-                'merchant_code' => $merchantCode,
-            ]
+            'GET'
         );
 
         if ($primaryResponse['status'] !== 404 || $authMethod !== 'api_key') {
-            return $primaryResponse;
+            return self::attachPreviousAttempts($primaryResponse, $previousAttempts);
         }
 
-        $fallbackEndpoint = sprintf(
-            '%s/me/merchant-terminals?limit=200&merchant_code=%s',
-            self::API_BASE_URL,
-            rawurlencode($merchantCode)
-        );
+        $previousAttempts[] = self::summariseAttempt($primaryResponse);
+
+        $fallbackEndpoint = sprintf('%s/me/merchant-terminals?limit=200', self::API_BASE_URL);
         $fallbackResponse = self::requestJson(
             $fallbackEndpoint,
             $credential,
             $authMethod,
-            'GET',
-            null,
-            [
-                'merchant_code' => $merchantCode,
-            ]
+            'GET'
         );
 
-        if (!isset($fallbackResponse['request']) || !is_array($fallbackResponse['request'])) {
-            $fallbackResponse['request'] = [];
-        }
-
-        $previousAttempt = [
-            'status' => $primaryResponse['status'],
-            'url' => $primaryResponse['request']['url'] ?? $primaryEndpoint,
-            'method' => $primaryResponse['request']['method'] ?? 'GET',
-            'merchant_code' => $merchantCode,
-            'response' => $primaryResponse['body'],
-            'response_raw' => $primaryResponse['response_raw'],
-        ];
-
-        if (isset($primaryResponse['request']['headers'])) {
-            $previousAttempt['headers'] = $primaryResponse['request']['headers'];
-        }
-
-        $fallbackResponse['request']['note'] = 'Fallback auf /me/merchant-terminals, da /me/terminals mit HTTP 404 geantwortet hat.';
-        $fallbackResponse['request']['previous_attempts'] = [$previousAttempt];
-
-        return $fallbackResponse;
+        return self::attachPreviousAttempts(
+            $fallbackResponse,
+            $previousAttempts,
+            'Fallback auf /me/merchant-terminals, da vorherige Aufrufe mit HTTP 404 geantwortet haben.'
+        );
     }
 
     /**
@@ -156,10 +144,9 @@ final class SumUpTerminalClient
         }
 
         $endpoint = sprintf(
-            '%s/me/terminals/%s/transactions?merchant_code=%s',
+            '%s/me/terminals/%s/transactions',
             self::API_BASE_URL,
-            rawurlencode($this->terminalSerial),
-            rawurlencode($this->merchantCode)
+            rawurlencode($this->terminalSerial)
         );
 
         return self::requestJson(
@@ -170,7 +157,6 @@ final class SumUpTerminalClient
             $payload,
             [
                 'terminal_serial' => $this->terminalSerial,
-                'merchant_code' => $this->merchantCode,
             ]
         );
     }
@@ -310,5 +296,49 @@ final class SumUpTerminalClient
         $end = substr($credential, -4);
 
         return sprintf('%s%s%s', $start, str_repeat('•', $length - 8), $end);
+    }
+
+    /**
+     * @param array{status:int,body:array<string,mixed>,request?:array<string,mixed>,response_raw:string} $response
+     * @return array{status:int,body:array<string,mixed>,request?:array<string,mixed>,response_raw:string}
+     */
+    private static function attachPreviousAttempts(array $response, array $attempts, ?string $note = null): array
+    {
+        if (!isset($response['request']) || !is_array($response['request'])) {
+            $response['request'] = [];
+        }
+
+        if ($note !== null && $note !== '') {
+            $response['request']['note'] = $note;
+        }
+
+        if ($attempts !== []) {
+            $response['request']['previous_attempts'] = $attempts;
+        }
+
+        return $response;
+    }
+
+    /**
+     * @param array{status:int,body:array<string,mixed>,request?:array<string,mixed>,response_raw:string} $response
+     * @return array{status:int,url:string,method:string,response:array<string,mixed>,response_raw:string,headers?:array<string,string>}
+     */
+    private static function summariseAttempt(array $response): array
+    {
+        $request = $response['request'] ?? [];
+
+        $attempt = [
+            'status' => $response['status'],
+            'url' => $request['url'] ?? '',
+            'method' => $request['method'] ?? 'GET',
+            'response' => $response['body'],
+            'response_raw' => $response['response_raw'],
+        ];
+
+        if (isset($request['headers']) && is_array($request['headers'])) {
+            $attempt['headers'] = $request['headers'];
+        }
+
+        return $attempt;
     }
 }
