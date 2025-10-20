@@ -55,6 +55,10 @@ Falls du OAuth verwendest, muss dein Client mindestens den Scope `transactions.t
 
 Die Weboberfläche stößt serverseitig einen Request an den SumUp-Readers/Cloud-Endpunkt an, der das SumUp-Solo-Terminal anweist, den Betrag anzuzeigen. Der endgültige Status (bezahlt, abgebrochen usw.) wird von SumUp asynchron über Webhooks gemeldet – richte daher im SumUp-Dashboard die passenden Webhook-URLs ein, wenn du Transaktionen automatisiert weiterverarbeiten möchtest.
 
+### Netzwerkanforderungen des Terminals
+
+Für das Versenden einer Zahlungsanforderung muss dein SumUp-Terminal lediglich eine stabile Internetverbindung besitzen – die WLAN-Verbindung (oder optional Ethernet) zum SumUp-Backend reicht aus. Deine PHP-Anwendung kommuniziert ausschließlich mit der SumUp-Cloud; es ist nicht erforderlich, dass Terminal und Webserver im selben Netzwerk liegen oder dass zusätzliche Ports freigeschaltet werden. Wichtig ist nur, dass das Terminal online ist und im SumUp-Dashboard als erreichbar erscheint.
+
 ### Gibt es Alternativen zu OAuth?
 
 Ja: Wenn du nur für dein eigenes Händlerkonto arbeitest, kannst du statt OAuth den SumUp-API-Key verwenden. Für Plattform-Szenarien mit mehreren Händlerkonten bleibt OAuth 2.0 die einzige Option.
@@ -81,7 +85,7 @@ Jeder Zahlungsversuch wird mit Zeitpunkt, angemeldetem Nutzer, ausgewähltem Ter
 
 - Bei API-Fehlern wird der HTTP-Statuscode sowie die Antwort von SumUp im Bereich „Antwortdetails“ angezeigt.
 - Prüfe bei Authentifizierungsfehlern dein Access Token und dessen Berechtigungen.
-- Stelle sicher, dass die Terminal-Seriennummer exakt mit der in deinem SumUp-Dashboard übereinstimmt.
+- Bei HTTP-404-Antworten: Kontrolliere, ob die Seriennummer exakt mit der Anzeige im Händler-Dashboard übereinstimmt und ob das Terminal dem Konto zugeordnet sowie für Cloud-Transaktionen freigeschaltet ist.
 - Erscheint nach dem Absenden lediglich eine weiße Seite, fehlt meist die PHP-Extension `curl`. Installiere sie auf deinem Server (unter Debian/Ubuntu z. B. `sudo apt install php-curl`) und starte PHP danach neu.
 
 ## Sicherheitshinweise

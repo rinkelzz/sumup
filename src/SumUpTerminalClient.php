@@ -78,7 +78,7 @@ final class SumUpTerminalClient
         }
 
         $endpoint = sprintf(
-            '%s/terminals/%s/transactions',
+            '%s/me/terminals/%s/transactions',
             self::API_BASE_URL,
             rawurlencode($this->terminalSerial)
         );
