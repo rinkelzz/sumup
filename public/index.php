@@ -10,12 +10,92 @@ require_once __DIR__ . '/../src/SumUpTerminalClient.php';
 require_once __DIR__ . '/../src/BasicAuth.php';
 require_once __DIR__ . '/../src/CredentialStore.php';
 
+function renderFatalError(string $message, int $statusCode = 500): void
+{
+    http_response_code($statusCode);
+    header('Content-Type: text/html; charset=UTF-8');
+
+    $safeMessage = htmlspecialchars($message, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+
+    echo <<<HTML
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="utf-8">
+    <title>Fehler – SumUp Terminal</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+        :root {
+            color-scheme: light dark;
+            font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+        }
+
+        body {
+            margin: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            background: #0f172a;
+            color: #f9fafb;
+            padding: 2rem;
+        }
+
+        .card {
+            background: #111827;
+            border-radius: 1rem;
+            padding: 2.5rem 2rem;
+            max-width: 32rem;
+            box-shadow: 0 1.5rem 3rem rgba(15, 23, 42, 0.35);
+        }
+
+        h1 {
+            margin-top: 0;
+            margin-bottom: 1rem;
+            font-size: 1.75rem;
+        }
+
+        p {
+            margin: 0;
+            line-height: 1.6;
+        }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <h1>Es ist ein Fehler aufgetreten</h1>
+        <p>{$safeMessage}</p>
+    </div>
+</body>
+</html>
+HTML;
+
+    exit;
+}
+
 $configPath = __DIR__ . '/../config/config.php';
 
 if (!file_exists($configPath)) {
-    http_response_code(500);
-    echo 'Konfigurationsdatei nicht gefunden. Bitte kopieren Sie config/config.example.php nach config/config.php.';
-    exit;
+    renderFatalError('Konfigurationsdatei nicht gefunden. Bitte kopieren Sie config/config.example.php nach config/config.php.');
+}
+
+/**
+ * @var mixed $config
+ */
+$config = require $configPath;
+
+if (!is_array($config)) {
+    renderFatalError('Die Konfigurationsdatei muss ein Array zurückgeben. Bitte prüfen Sie config/config.php.');
+}
+
+if (!isset($config['sumup']) || !is_array($config['sumup'])) {
+    renderFatalError('In der Konfigurationsdatei fehlt der Abschnitt "sumup". Bitte ergänzen Sie config/config.php.');
+}
+
+foreach (['auth', 'log', 'secure_store'] as $section) {
+    if (isset($config[$section]) && !is_array($config[$section])) {
+        renderFatalError(sprintf('Der Abschnitt "%s" muss ein Array sein. Bitte korrigieren Sie config/config.php.', $section));
+    }
 }
 
 /**
@@ -29,11 +109,11 @@ if (!file_exists($configPath)) {
  *         terminal_label?: string,
  *         terminals?: array<int|string, array{serial?: string,label?: string}|string>
  *     },
- *     auth: array{realm?: string, users: array<string, string>},
- *     log?: array{transactions_file?: string}
+ *     auth?: array{realm?: string, users?: array<string, string>},
+ *     log?: array{transactions_file?: string},
+ *     secure_store?: array{credential_file?: string, key_file?: string}
  * } $config
  */
-$config = require $configPath;
 
 $sumUpConfig = $config['sumup'] ?? [];
 $authMethod = strtolower((string) ($sumUpConfig['auth_method'] ?? ''));
@@ -61,9 +141,7 @@ if ($authMethod === '') {
 }
 
 if (!in_array($authMethod, ['api_key', 'oauth'], true)) {
-    http_response_code(500);
-    echo 'Ungültige SumUp-Authentifizierungsmethode. Erlaubt sind "api_key" oder "oauth".';
-    exit;
+    renderFatalError('Ungültige SumUp-Authentifizierungsmethode. Erlaubt sind "api_key" oder "oauth".');
 }
 
 $credential = $authMethod === 'oauth' ? $accessToken : $apiKey;
@@ -78,19 +156,17 @@ if ($authMethod === 'api_key' && $apiKey === '' && $storedCredentialDetails !== 
 }
 
 if ($credential === '') {
-    http_response_code(500);
     if ($authMethod === 'oauth') {
-        echo 'Kein OAuth Access Token konfiguriert. Bitte ergänzen Sie config/config.php.';
-    } else {
-        $hint = 'Kein SumUp API-Key konfiguriert. Bitte ergänzen Sie config/config.php.';
-
-        if ($credentialStore instanceof CredentialStore) {
-            $hint .= ' Alternativ können Sie Ihren Schlüssel über anmeldung.php sicher hinterlegen.';
-        }
-
-        echo $hint;
+        renderFatalError('Kein OAuth Access Token konfiguriert. Bitte ergänzen Sie config/config.php.');
     }
-    exit;
+
+    $hint = 'Kein SumUp API-Key konfiguriert. Bitte ergänzen Sie config/config.php.';
+
+    if ($credentialStore instanceof CredentialStore) {
+        $hint .= ' Alternativ können Sie Ihren Schlüssel über anmeldung.php sicher hinterlegen.';
+    }
+
+    renderFatalError($hint);
 }
 $defaultTerminalSerial = (string) ($sumUpConfig['terminal_serial'] ?? '');
 $defaultTerminalLabel = (string) ($sumUpConfig['terminal_label'] ?? '');
