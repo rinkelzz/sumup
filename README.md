@@ -74,6 +74,7 @@ Jeder Zahlungsversuch wird mit Zeitpunkt, angemeldetem Nutzer, ausgewähltem Ter
 - Bei API-Fehlern wird der HTTP-Statuscode sowie die Antwort von SumUp im Bereich „Antwortdetails“ angezeigt.
 - Prüfe bei Authentifizierungsfehlern dein Access Token und dessen Berechtigungen.
 - Stelle sicher, dass die Terminal-Seriennummer exakt mit der in deinem SumUp-Dashboard übereinstimmt.
+- Erscheint nach dem Absenden lediglich eine weiße Seite, fehlt meist die PHP-Extension `curl`. Installiere sie auf deinem Server (unter Debian/Ubuntu z. B. `sudo apt install php-curl`) und starte PHP danach neu.
 
 ## Sicherheitshinweise
 

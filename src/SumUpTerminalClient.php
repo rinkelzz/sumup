@@ -83,6 +83,10 @@ final class SumUpTerminalClient
      */
     private function postJson(string $url, array $payload): array
     {
+        if (!extension_loaded('curl')) {
+            throw new RuntimeException('Die PHP-Extension "curl" wird für die Kommunikation mit SumUp benötigt.');
+        }
+
         $ch = curl_init($url);
         if ($ch === false) {
             throw new RuntimeException('Unable to initialise cURL.');

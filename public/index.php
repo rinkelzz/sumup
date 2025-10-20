@@ -137,6 +137,12 @@ $transactionsLogFile = (string) ($logConfig['transactions_file'] ?? (__DIR__ . '
 $authConfig = $config['auth'] ?? [];
 $username = BasicAuth::enforce($authConfig);
 
+$environmentErrors = [];
+
+if (!extension_loaded('curl')) {
+    $environmentErrors[] = 'Die PHP-Extension "curl" ist nicht installiert. Ohne sie können keine Zahlungsanforderungen an SumUp gesendet werden.';
+}
+
 $error = null;
 $result = null;
 $logError = null;
@@ -212,7 +218,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $error = 'Bitte wählen Sie ein Terminal aus.';
     }
 
-    if ($error === null) {
+    if ($error === null && $environmentErrors === []) {
         try {
             $client = new SumUpTerminalClient($credential, $selectedTerminalSerial, $authMethod);
             $response = $client->sendPayment($amount, $currency, $externalId, $description, $tipAmount);
@@ -454,6 +460,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 </div>
             <?php endif; ?>
         <?php endif; ?>
+        <?php foreach ($environmentErrors as $envError): ?>
+            <div class="alert error">
+                <strong>Systemvoraussetzung:</strong>
+                <div><?= htmlspecialchars($envError, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') ?></div>
+            </div>
+        <?php endforeach; ?>
+
         <?php if ($error !== null): ?>
             <div class="alert error">
                 <strong>Fehler:</strong>
@@ -524,7 +537,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 <textarea name="description" placeholder="Referenz oder Notiz"><?= isset($_POST['description']) ? htmlspecialchars((string) $_POST['description'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') : '' ?></textarea>
             </label>
 
-            <button type="submit"<?= $terminalOptions === [] ? ' disabled' : '' ?>>An Terminal senden</button>
+            <button type="submit"<?= $terminalOptions === [] || $environmentErrors !== [] ? ' disabled' : '' ?>>An Terminal senden</button>
         </form>
 
         <?php if ($result !== null): ?>
