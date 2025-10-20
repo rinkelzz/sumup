@@ -173,9 +173,16 @@ $defaultTerminalLabel = (string) ($sumUpConfig['terminal_label'] ?? '');
 $currency = (string) ($sumUpConfig['currency'] ?? 'EUR');
 
 $terminalOptions = [];
+$terminalWarnings = [];
 
-if (isset($sumUpConfig['terminals']) && is_array($sumUpConfig['terminals'])) {
-    foreach ($sumUpConfig['terminals'] as $key => $terminalConfig) {
+$terminalsConfig = $sumUpConfig['terminals'] ?? null;
+
+if ($terminalsConfig !== null && !is_array($terminalsConfig)) {
+    $terminalWarnings[] = 'Die Konfiguration "sumup.terminals" muss ein Array sein. Bitte prüfen Sie config/config.php.';
+}
+
+if (is_array($terminalsConfig)) {
+    foreach ($terminalsConfig as $key => $terminalConfig) {
         $serial = '';
         $label = '';
 
@@ -197,6 +204,15 @@ if (isset($sumUpConfig['terminals']) && is_array($sumUpConfig['terminals'])) {
         }
 
         if ($serial === '') {
+            $humanReadableKey = is_string($key)
+                ? sprintf('Schlüssel "%s"', $key)
+                : sprintf('Index %d', (int) $key);
+
+            $terminalWarnings[] = sprintf(
+                'Der Terminaleintrag unter %s enthält keine Seriennummer. Bitte ergänzen Sie sie in config/config.php.',
+                $humanReadableKey
+            );
+
             continue;
         }
 
@@ -211,6 +227,10 @@ if (isset($sumUpConfig['terminals']) && is_array($sumUpConfig['terminals'])) {
 if ($terminalOptions === [] && $defaultTerminalSerial !== '') {
     $label = $defaultTerminalLabel !== '' ? $defaultTerminalLabel : $defaultTerminalSerial;
     $terminalOptions[$defaultTerminalSerial] = $label;
+}
+
+if ($terminalOptions === [] && $terminalsConfig === null && $defaultTerminalSerial === '') {
+    $terminalWarnings[] = 'Es wurden noch keine Terminals konfiguriert. Öffnen Sie config/config.php und fügen Sie unter "sumup.terminals" mindestens ein Gerät hinzu (siehe config/config.example.php).';
 }
 
 $selectedTerminalSerial = array_key_first($terminalOptions) ?? '';
@@ -453,6 +473,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             border: 1px solid #93c5fd;
         }
 
+        .alert.warning {
+            background: #fef3c7;
+            color: #92400e;
+            border: 1px solid #fde68a;
+        }
+
         pre {
             background: #0f172a;
             color: #e2e8f0;
@@ -501,6 +527,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 color: #bfdbfe;
             }
 
+            .alert.warning {
+                background: rgba(217, 119, 6, 0.2);
+                border-color: rgba(217, 119, 6, 0.4);
+                color: #fef3c7;
+            }
+
             .alert.error {
                 background: rgba(153, 27, 27, 0.2);
                 border-color: rgba(153, 27, 27, 0.4);
@@ -545,6 +577,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 </div>
             <?php endif; ?>
         <?php endif; ?>
+        <?php foreach ($terminalWarnings as $terminalWarning): ?>
+            <div class="alert warning">
+                <strong>Konfiguration:</strong>
+                <div><?= htmlspecialchars($terminalWarning, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') ?></div>
+            </div>
+        <?php endforeach; ?>
+
         <?php foreach ($environmentErrors as $envError): ?>
             <div class="alert error">
                 <strong>Systemvoraussetzung:</strong>

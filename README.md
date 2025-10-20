@@ -19,6 +19,7 @@ Dieses Projekt stellt eine einfache PHP-Weboberfläche bereit, mit der du den Re
    - Assoziatives Array mit der Seriennummer als Schlüssel und einer Kurzbeschreibung als Wert.
    - Assoziatives Array mit der Seriennummer als Schlüssel und einem Array mit zusätzlichen Angaben, etwa `['label' => 'Tresen']`.
    Leerzeichen werden automatisch entfernt; fehlende Labels werden durch die Seriennummer ersetzt.
+   Sollte das Dashboard weiterhin keine Auswahl anbieten, prüfe die gelben Konfigurationshinweise oberhalb des Formulars – sie nennen die betroffenen Einträge in `config/config.php`.
 4. Passe optional die Standardwährung an (ISO-4217-Code, z. B. `EUR`).
 5. Ersetze die Beispiel-Zugangsdaten durch eigene Benutzer und `password_hash`-Werte.
 6. Lege bei Bedarf einen alternativen Speicherort für das Transaktionsprotokoll fest.
