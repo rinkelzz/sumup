@@ -150,6 +150,8 @@ if ($credentialStore instanceof CredentialStore) {
     $storedCredentialDetails = $credentialStore->getApiCredential();
 }
 
+$configurationWarnings = [];
+
 if ($authMethod === 'api_key' && $apiKey === '' && $storedCredentialDetails !== null) {
     $apiKey = $storedCredentialDetails['api_key'];
     $credential = $apiKey;
@@ -167,6 +169,10 @@ if ($credential === '') {
     }
 
     renderFatalError($hint);
+}
+
+if ($authMethod === 'api_key' && $credential !== '' && str_starts_with($credential, 'sum_pk_')) {
+    $configurationWarnings[] = 'Der eingetragene SumUp-Schlüssel beginnt mit "sum_pk_". Für Terminal-Aufrufe benötigen Sie den geheimen Schlüssel mit dem Präfix "sum_sk_" (Personal Access Token).';
 }
 $defaultTerminalSerial = (string) ($sumUpConfig['terminal_serial'] ?? '');
 $defaultTerminalLabel = (string) ($sumUpConfig['terminal_label'] ?? '');
@@ -638,6 +644,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 </div>
             <?php endif; ?>
         <?php endif; ?>
+        <?php foreach ($configurationWarnings as $configurationWarning): ?>
+            <div class="alert warning">
+                <strong>Konfiguration:</strong>
+                <div><?= htmlspecialchars($configurationWarning, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') ?></div>
+            </div>
+        <?php endforeach; ?>
+
         <?php foreach ($terminalWarnings as $terminalWarning): ?>
             <div class="alert warning">
                 <strong>Konfiguration:</strong>

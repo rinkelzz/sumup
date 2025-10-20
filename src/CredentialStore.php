@@ -74,6 +74,10 @@ final class CredentialStore
             throw new RuntimeException('API-Key darf nicht leer sein.');
         }
 
+        if (str_starts_with($apiKey, 'sum_pk_')) {
+            throw new RuntimeException('Der eingegebene Schlüssel beginnt mit "sum_pk_". Bitte verwenden Sie den geheimen SumUp-API-Key mit dem Präfix "sum_sk_".');
+        }
+
         $key = $this->loadOrCreateKey();
         $nonce = random_bytes(SODIUM_CRYPTO_SECRETBOX_NONCEBYTES);
         $ciphertext = sodium_crypto_secretbox($apiKey, $nonce, $key);

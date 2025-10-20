@@ -26,7 +26,7 @@ Dieses Projekt stellt eine einfache PHP-Weboberfläche bereit, mit der du den Re
 6. Lege bei Bedarf einen alternativen Speicherort für das Transaktionsprotokoll fest.
 7. (Optional) Passe die Pfade des verschlüsselten Credential-Stores (`secure_store`) an, falls du die Dateien an einem anderen Ort ablegen möchtest.
 
-> Tipp: Den API-Key findest du unter <https://me.sumup.com/developers>. Melde dich dort mit deinem Händlerkonto an, wähle **„Personal Access Tokens“** aus, erstelle bei Bedarf einen neuen Token und kopiere den angezeigten Schlüssel in die Konfiguration. Das OAuth-Access-Token erzeugst du im gleichen Bereich über deinen OAuth-Client.
+> Tipp: Den API-Key findest du unter <https://me.sumup.com/developers>. Melde dich dort mit deinem Händlerkonto an, wähle **„Personal Access Tokens“** aus, erstelle bei Bedarf einen neuen Token und kopiere den angezeigten Schlüssel in die Konfiguration. Für Terminal-Aufrufe benötigst du den **Secret Key** mit dem Präfix `sum_sk_…`. Der veröffentlichbare Schlüssel `sum_pk_…` reicht nicht aus. Das OAuth-Access-Token erzeugst du im gleichen Bereich über deinen OAuth-Client.
 
 ## API-Key sicher speichern
 
@@ -44,6 +44,7 @@ Zum Löschen des gespeicherten API-Keys nutze die entsprechende Schaltfläche in
 SumUp unterstützt für den Terminal-API-Zugriff zwei Verfahren:
 
 - **API-Key („Personal Access Token“)** – geeignet, wenn du ausschließlich für dein eigenes Händlerkonto arbeitest. Wähle in der Konfiguration `auth_method = "api_key"` und trage den API-Key ein.
+  Verwende dafür den Secret Key (`sum_sk_…`). Der Publishable Key (`sum_pk_…`) kann nur in Client-Anwendungen genutzt werden und wird von der Terminal-API abgelehnt.
 - **OAuth 2.0 Access Token** – erforderlich, wenn deine Anwendung im Namen anderer Händler agiert oder du eine Plattform betreibst. Setze `auth_method = "oauth"` und hinterlege das Access Token.
 
 ### Erforderliche OAuth-Berechtigungen

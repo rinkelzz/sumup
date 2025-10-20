@@ -23,6 +23,10 @@ final class SumUpTerminalClient
             throw new RuntimeException('Missing SumUp credentials.');
         }
 
+        if ($this->authMethod === 'api_key' && str_starts_with($credential, 'sum_pk_')) {
+            throw new RuntimeException('Der konfigurierte SumUp-Schlüssel beginnt mit "sum_pk_". Bitte verwenden Sie den geheimen API-Key mit dem Präfix "sum_sk_".');
+        }
+
         if ($terminalSerial === '') {
             throw new RuntimeException('Missing SumUp terminal serial number.');
         }

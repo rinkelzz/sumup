@@ -6,7 +6,7 @@ return [
     'sumup' => [
         // Choose whether you authenticate with an API key (own account) or an OAuth access token (multi-merchant platforms)
         'auth_method' => 'api_key', // allowed values: api_key, oauth
-        // Leave blank when you store the key via public/anmeldung.php
+        // Leave blank when you store the key via public/anmeldung.php. Use the secret key (prefix "sum_sk_").
         'api_key' => '',
         // For OAuth set auth_method to "oauth" and place the access token below instead
         'access_token' => 'your-oauth-access-token-here',
