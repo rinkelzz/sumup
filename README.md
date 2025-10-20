@@ -19,6 +19,10 @@ Dieses Projekt stellt eine einfache PHP-Weboberfläche bereit, mit der du den Re
 
 > Tipp: Das Access Token erhältst du über den OAuth-Client in deinem SumUp-Entwicklerkonto. Achte darauf, dass es die Berechtigung `transactions.terminal` besitzt.
 
+## Erforderliche OAuth-Berechtigungen
+
+Für die Kommunikation mit der SumUp Terminal API muss der OAuth-Client mindestens den Scope `transactions.terminal` erhalten. Ohne diese Berechtigung schlägt das Pushen des Betrags auf das Gerät mit einem HTTP-Fehler 403 fehl.
+
 ## Anwendung starten
 
 Starte den integrierten PHP-Server beispielsweise so:
