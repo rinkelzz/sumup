@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace SumUp;
 
+use BadMethodCallException;
 use RuntimeException;
 
 final class SumUpTerminalClient
@@ -199,6 +200,38 @@ final class SumUpTerminalClient
         );
 
         return self::attachPreviousAttempts($fallbackResponse, $previousAttempts);
+    }
+
+    /**
+     * @param array<int, mixed> $arguments
+     *
+     * @return mixed
+     */
+    public function __call(string $name, array $arguments)
+    {
+        if ($name === 'activateTerminal') {
+            $activationCode = isset($arguments[0]) ? (string) $arguments[0] : '';
+            $merchantCode = isset($arguments[1]) ? (string) $arguments[1] : null;
+            $label = isset($arguments[2]) ? (string) $arguments[2] : null;
+
+            if ($merchantCode === '') {
+                $merchantCode = null;
+            }
+
+            if ($label === '') {
+                $label = null;
+            }
+
+            return self::activateTerminal(
+                $this->credential,
+                $this->authMethod,
+                $activationCode,
+                $merchantCode,
+                $label
+            );
+        }
+
+        throw new BadMethodCallException(sprintf('Call to undefined method %s::%s()', self::class, $name));
     }
 
     /**
