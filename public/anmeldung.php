@@ -368,13 +368,13 @@ function escape(string $value): string
     <?php if ($store instanceof CredentialStore): ?>
         <form method="post">
             <label>
-                Händler-E-Mail oder Referenz (optional)
-                <input type="text" name="merchant_id" value="<?= $storedCredential !== null ? escape($storedCredential['merchant_id']) : '' ?>" placeholder="z. B. meine-filiale@example.com">
+                Händlercode (optional, z. B. MCRNF79M)
+                <input type="text" name="merchant_id" value="<?= $storedCredential !== null ? escape($storedCredential['merchant_id']) : '' ?>" placeholder="z. B. MCRNF79M">
             </label>
 
             <label>
                 SumUp API-Key
-                <input type="password" name="api_key" autocomplete="off" placeholder="su_pk_..." required>
+                <input type="password" name="api_key" autocomplete="off" placeholder="sum_sk_..." required>
             </label>
 
             <button type="submit" name="action" value="save">API-Key speichern</button>
@@ -384,7 +384,7 @@ function escape(string $value): string
             <div class="alert info" style="margin-top: 1.5rem;">
                 <strong>Aktuell gespeicherter Schlüssel</strong>
                 <p>
-                    <?= $storedCredential['merchant_id'] !== '' ? 'Händler: ' . escape($storedCredential['merchant_id']) . '<br>' : '' ?>
+                    <?= $storedCredential['merchant_id'] !== '' ? 'Händlerkennung: ' . escape($storedCredential['merchant_id']) . '<br>' : '' ?>
                     Zuletzt aktualisiert: <?= isset($storedCredential['updated_at']) ? escape($storedCredential['updated_at']) : 'unbekannt' ?>
                 </p>
                 <div class="actions">

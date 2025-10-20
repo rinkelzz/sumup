@@ -6,14 +6,17 @@ return [
     'sumup' => [
         // Choose whether you authenticate with an API key (own account) or an OAuth access token (multi-merchant platforms)
         'auth_method' => 'api_key', // allowed values: api_key, oauth
-        // Leave blank when you store the key via public/anmeldung.php
+        // Leave blank when you store the key via public/anmeldung.php. Use the secret key (prefix "sum_sk_").
         'api_key' => '',
+        // Optional but recommended for API-key setups: SumUp merchant code (e.g. MCRNF79M) used for terminal discovery
+        // and for the activation helper (public/terminal-verknuepfung.php)
+        'merchant_code' => '',
         // For OAuth set auth_method to "oauth" and place the access token below instead
         'access_token' => 'your-oauth-access-token-here',
         // Default currency in ISO 4217 format
         'currency' => 'EUR',
         // Configure one or multiple SumUp terminals that can receive payments from the web UI
-        // You can either provide a numerically indexed list as below or use the serial number as array key
+        // You can either provide a single serial as string, a numerically indexed list as below or use the serial number as array key
         'terminals' => [
             [
                 'serial' => 'ABCDEF123456',
