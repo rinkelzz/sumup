@@ -357,6 +357,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $client = new SumUpTerminalClient($credential, $selectedTerminalSerial, $authMethod);
             $response = $client->sendPayment($amount, $currency, $externalId, $description, $tipAmount);
 
+            $debugDetails = [
+                'http_status' => $response['status'],
+                'response' => $response['body'],
+            ];
+
+            if (isset($response['request'])) {
+                $debugDetails['request'] = $response['request'];
+            }
+
+            if (isset($response['response_raw'])) {
+                $debugDetails['response_raw'] = $response['response_raw'];
+            }
+
+            $debugHints = [];
+
             if ($response['status'] >= 200 && $response['status'] < 300) {
                 $paymentSuccessful = true;
                 $terminalDisplayName = $selectedTerminalLabel !== '' ? $selectedTerminalLabel : $selectedTerminalSerial;
@@ -368,16 +383,33 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                             $terminalDisplayName
                         )
                         : 'Der Betrag wurde an das Terminal übertragen. Warten Sie auf die Bestätigung auf dem Gerät.',
-                    'details' => $response['body'],
+                    'details' => $debugDetails,
+                    'hints' => $debugHints,
                 ];
             } else {
                 $error = sprintf(
                     'Fehler beim Senden der Zahlungsanforderung (HTTP %d).',
                     $response['status']
                 );
+
+                if ($response['status'] === 404) {
+                    $debugHints[] = 'SumUp meldet "Not Found". Prüfen Sie, ob die eingetragene Terminal-Seriennummer exakt mit dem Aufkleber unter dem Gerät übereinstimmt.';
+                    $debugHints[] = 'Stellen Sie sicher, dass das Terminal für Cloud-/Solo-Transaktionen freigeschaltet ist und mit demselben Händlerkonto verbunden wurde, das den API-Key erzeugt hat.';
+                    $debugHints[] = 'Kontrollieren Sie, ob das Terminal zuletzt online war. Inaktive oder abgemeldete Geräte akzeptieren keine Zahlungsanforderungen.';
+                }
+
+                if ($response['status'] === 401 || $response['status'] === 403) {
+                    $debugHints[] = 'Der SumUp-Server lehnt die Authentifizierung ab. Prüfen Sie API-Key bzw. OAuth-Token und deren Berechtigungen.';
+                }
+
+                if (!empty($debugHints)) {
+                    $error .= ' Bitte beachten Sie die Hinweise zur Fehlersuche weiter unten.';
+                }
+
                 $result = [
                     'title' => 'Antwort des SumUp-Servers',
-                    'details' => $response['body'],
+                    'details' => $debugDetails,
+                    'hints' => $debugHints,
                 ];
             }
         } catch (Throwable $exception) {
@@ -636,6 +668,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             <div class="alert error">
                 <strong>Protokollierung:</strong>
                 <div><?= htmlspecialchars($logError, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') ?></div>
+            </div>
+        <?php endif; ?>
+
+        <?php if ($result !== null && !empty($result['hints'])): ?>
+            <div class="alert info">
+                <strong>Hinweise zur Fehlersuche:</strong>
+                <ul>
+                    <?php foreach ($result['hints'] as $hint): ?>
+                        <li><?= htmlspecialchars($hint, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') ?></li>
+                    <?php endforeach; ?>
+                </ul>
             </div>
         <?php endif; ?>
 

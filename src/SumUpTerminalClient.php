@@ -37,7 +37,12 @@ final class SumUpTerminalClient
      * @param string|null $description  Optional description that appears in SumUp dashboard.
      * @param float|null  $tipAmount    Optional tip amount in major units.
      *
-     * @return array{status:int, body:array<string,mixed>}
+     * @return array{
+     *     status:int,
+     *     body:array<string,mixed>,
+     *     request:array<string,mixed>,
+     *     response_raw:string
+     * }
      */
     public function sendPayment(
         float $amount,
@@ -79,7 +84,12 @@ final class SumUpTerminalClient
 
     /**
      * @param array<string,mixed> $payload
-     * @return array{status:int, body:array<string,mixed>}
+     * @return array{
+     *     status:int,
+     *     body:array<string,mixed>,
+     *     request:array<string,mixed>,
+     *     response_raw:string
+     * }
      */
     private function postJson(string $url, array $payload): array
     {
@@ -126,6 +136,18 @@ final class SumUpTerminalClient
         return [
             'status' => $statusCode,
             'body' => $decoded,
+            'request' => [
+                'url' => $url,
+                'terminal_serial' => $this->terminalSerial,
+                'auth_method' => $this->authMethod,
+                'payload' => $payload,
+                'headers' => [
+                    'Content-Type' => 'application/json',
+                    'Accept' => 'application/json',
+                    'Authorization' => sprintf('Bearer %s', $this->redactCredential()),
+                ],
+            ],
+            'response_raw' => $responseBody,
         ];
     }
 
@@ -133,5 +155,23 @@ final class SumUpTerminalClient
     {
         // SumUp accepts API keys and OAuth tokens via Bearer authorization.
         return 'Bearer ' . $this->credential;
+    }
+
+    private function redactCredential(): string
+    {
+        $length = strlen($this->credential);
+
+        if ($length === 0) {
+            return '';
+        }
+
+        if ($length <= 8) {
+            return str_repeat('•', $length);
+        }
+
+        $start = substr($this->credential, 0, 4);
+        $end = substr($this->credential, -4);
+
+        return sprintf('%s%s%s', $start, str_repeat('•', $length - 8), $end);
     }
 }
