@@ -172,7 +172,10 @@ $defaultTerminalSerial = (string) ($sumUpConfig['terminal_serial'] ?? '');
 $defaultTerminalLabel = (string) ($sumUpConfig['terminal_label'] ?? '');
 $currency = (string) ($sumUpConfig['currency'] ?? 'EUR');
 
+/** @var array<int, array{serial:string,label:string}> $terminalOptions */
 $terminalOptions = [];
+/** @var array<string, string> $terminalLookup */
+$terminalLookup = [];
 $terminalWarnings = [];
 
 $terminalsConfig = $sumUpConfig['terminals'] ?? null;
@@ -233,21 +236,34 @@ if (is_array($terminalsConfig)) {
             $label = $serial;
         }
 
-        $terminalOptions[$serial] = $label;
+        $terminalOptions[] = [
+            'serial' => $serial,
+            'label' => $label,
+        ];
+        $terminalLookup[$serial] = $label;
     }
 }
 
 if ($terminalOptions === [] && $defaultTerminalSerial !== '') {
     $label = $defaultTerminalLabel !== '' ? $defaultTerminalLabel : $defaultTerminalSerial;
-    $terminalOptions[$defaultTerminalSerial] = $label;
+    $terminalOptions[] = [
+        'serial' => $defaultTerminalSerial,
+        'label' => $label,
+    ];
+    $terminalLookup[$defaultTerminalSerial] = $label;
 }
 
 if ($terminalOptions === [] && $terminalsConfig === null && $defaultTerminalSerial === '') {
     $terminalWarnings[] = 'Es wurden noch keine Terminals konfiguriert. Öffnen Sie config/config.php und fügen Sie unter "sumup.terminals" mindestens ein Gerät hinzu (siehe config/config.example.php).';
 }
 
-$selectedTerminalSerial = array_key_first($terminalOptions) ?? '';
-$selectedTerminalLabel = $selectedTerminalSerial !== '' ? $terminalOptions[$selectedTerminalSerial] : '';
+$selectedTerminalSerial = '';
+$selectedTerminalLabel = '';
+
+if ($terminalOptions !== []) {
+    $selectedTerminalSerial = $terminalOptions[0]['serial'];
+    $selectedTerminalLabel = $terminalOptions[0]['label'];
+}
 
 $logConfig = $config['log'] ?? [];
 $transactionsLogFile = (string) ($logConfig['transactions_file'] ?? (__DIR__ . '/../var/transactions.log'));
@@ -326,9 +342,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if ($terminalOptions === []) {
         $error = 'Es ist kein SumUp-Terminal konfiguriert.';
     } elseif ($requestedTerminalSerial !== '') {
-        if (array_key_exists($requestedTerminalSerial, $terminalOptions)) {
+        if (array_key_exists($requestedTerminalSerial, $terminalLookup)) {
             $selectedTerminalSerial = $requestedTerminalSerial;
-            $selectedTerminalLabel = $terminalOptions[$requestedTerminalSerial];
+            $selectedTerminalLabel = $terminalLookup[$requestedTerminalSerial];
         } else {
             $error = 'Ausgewähltes Terminal ist ungültig oder nicht konfiguriert.';
         }
@@ -635,9 +651,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 <label>
                     Terminal
                     <select name="terminal_serial">
-                        <?php foreach ($terminalOptions as $serial => $label): ?>
+                        <?php foreach ($terminalOptions as $option): ?>
+                            <?php $serial = $option['serial']; ?>
                             <option value="<?= htmlspecialchars($serial, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') ?>"<?= $serial === $selectedTerminalSerial ? ' selected' : '' ?>>
-                                <?= htmlspecialchars($label, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') ?>
+                                <?= htmlspecialchars($option['label'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') ?>
                             </option>
                         <?php endforeach; ?>
                     </select>
