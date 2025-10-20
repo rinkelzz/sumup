@@ -177,8 +177,12 @@ $terminalWarnings = [];
 
 $terminalsConfig = $sumUpConfig['terminals'] ?? null;
 
+if (is_string($terminalsConfig) || is_int($terminalsConfig) || is_float($terminalsConfig)) {
+    $terminalsConfig = [$terminalsConfig];
+}
+
 if ($terminalsConfig !== null && !is_array($terminalsConfig)) {
-    $terminalWarnings[] = 'Die Konfiguration "sumup.terminals" muss ein Array sein. Bitte prüfen Sie config/config.php.';
+    $terminalWarnings[] = 'Die Konfiguration "sumup.terminals" muss entweder ein Array oder eine einfache Seriennummer sein. Bitte prüfen Sie config/config.php.';
 }
 
 if (is_array($terminalsConfig)) {

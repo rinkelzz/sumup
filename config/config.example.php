@@ -13,7 +13,7 @@ return [
         // Default currency in ISO 4217 format
         'currency' => 'EUR',
         // Configure one or multiple SumUp terminals that can receive payments from the web UI
-        // You can either provide a numerically indexed list as below or use the serial number as array key
+        // You can either provide a single serial as string, a numerically indexed list as below or use the serial number as array key
         'terminals' => [
             [
                 'serial' => 'ABCDEF123456',

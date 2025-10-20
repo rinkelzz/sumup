@@ -15,6 +15,7 @@ Dieses Projekt stellt eine einfache PHP-Weboberfläche bereit, mit der du den Re
 1. Kopiere die Datei `config/config.example.php` nach `config/config.php`.
 2. Lege fest, ob du dich mit einem API-Key (`auth_method = "api_key"`) oder einem OAuth-Token (`auth_method = "oauth"`) authentifizieren möchtest. Wenn du den API-Key nicht direkt in der Konfigurationsdatei speichern willst, lasse das Feld `api_key` leer und hinterlege den Schlüssel später sicher über `public/anmeldung.php`.
 3. Trage deine SumUp-Terminals unter `sumup.terminals` ein. Erlaubte Formate:
+   - Einzelne Seriennummer als String, z. B. `'ABCDEF123456'`.
    - Numerisches Array von Objekten mit `serial` und optional `label` (wie im Beispiel).
    - Assoziatives Array mit der Seriennummer als Schlüssel und einer Kurzbeschreibung als Wert.
    - Assoziatives Array mit der Seriennummer als Schlüssel und einem Array mit zusätzlichen Angaben, etwa `['label' => 'Tresen']`.
