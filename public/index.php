@@ -104,8 +104,17 @@ if (isset($sumUpConfig['terminals']) && is_array($sumUpConfig['terminals'])) {
         $label = '';
 
         if (is_array($terminalConfig)) {
-            $serial = (string) ($terminalConfig['serial'] ?? '');
-            $label = isset($terminalConfig['label']) ? (string) $terminalConfig['label'] : '';
+            $serial = trim((string) ($terminalConfig['serial'] ?? ''));
+
+            if ($serial === '' && is_string($key) && $key !== '') {
+                $serial = trim((string) $key);
+            }
+
+            if (isset($terminalConfig['label'])) {
+                $label = trim((string) $terminalConfig['label']);
+            } elseif (is_string($key) && $key !== '' && $key !== $serial) {
+                $label = trim((string) $key);
+            }
         } elseif (is_string($terminalConfig) || is_int($terminalConfig) || is_float($terminalConfig)) {
             $serial = trim((string) $terminalConfig);
             $label = is_string($key) ? trim((string) $key) : '';

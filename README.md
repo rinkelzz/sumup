@@ -14,10 +14,15 @@ Dieses Projekt stellt eine einfache PHP-Weboberfläche bereit, mit der du den Re
 
 1. Kopiere die Datei `config/config.example.php` nach `config/config.php`.
 2. Lege fest, ob du dich mit einem API-Key (`auth_method = "api_key"`) oder einem OAuth-Token (`auth_method = "oauth"`) authentifizieren möchtest. Wenn du den API-Key nicht direkt in der Konfigurationsdatei speichern willst, lasse das Feld `api_key` leer und hinterlege den Schlüssel später sicher über `public/anmeldung.php`.
-3. Passe optional die Standardwährung an (ISO-4217-Code, z. B. `EUR`).
-4. Ersetze die Beispiel-Zugangsdaten durch eigene Benutzer und `password_hash`-Werte.
-5. Lege bei Bedarf einen alternativen Speicherort für das Transaktionsprotokoll fest.
-6. (Optional) Passe die Pfade des verschlüsselten Credential-Stores (`secure_store`) an, falls du die Dateien an einem anderen Ort ablegen möchtest.
+3. Trage deine SumUp-Terminals unter `sumup.terminals` ein. Erlaubte Formate:
+   - Numerisches Array von Objekten mit `serial` und optional `label` (wie im Beispiel).
+   - Assoziatives Array mit der Seriennummer als Schlüssel und einer Kurzbeschreibung als Wert.
+   - Assoziatives Array mit der Seriennummer als Schlüssel und einem Array mit zusätzlichen Angaben, etwa `['label' => 'Tresen']`.
+   Leerzeichen werden automatisch entfernt; fehlende Labels werden durch die Seriennummer ersetzt.
+4. Passe optional die Standardwährung an (ISO-4217-Code, z. B. `EUR`).
+5. Ersetze die Beispiel-Zugangsdaten durch eigene Benutzer und `password_hash`-Werte.
+6. Lege bei Bedarf einen alternativen Speicherort für das Transaktionsprotokoll fest.
+7. (Optional) Passe die Pfade des verschlüsselten Credential-Stores (`secure_store`) an, falls du die Dateien an einem anderen Ort ablegen möchtest.
 
 > Tipp: Den API-Key findest du unter <https://me.sumup.com/developers>. Melde dich dort mit deinem Händlerkonto an, wähle **„Personal Access Tokens“** aus, erstelle bei Bedarf einen neuen Token und kopiere den angezeigten Schlüssel in die Konfiguration. Das OAuth-Access-Token erzeugst du im gleichen Bereich über deinen OAuth-Client.
 
