@@ -192,15 +192,24 @@ if (is_array($terminalsConfig)) {
 
         if (is_array($terminalConfig)) {
             $serial = trim((string) ($terminalConfig['serial'] ?? ''));
+            $keyRepresentsSerial = is_string($key) || is_int($key) || is_float($key);
 
-            if ($serial === '' && is_string($key) && $key !== '') {
-                $serial = trim((string) $key);
+            if ($serial === '' && $keyRepresentsSerial) {
+                $serialFromKey = trim((string) $key);
+
+                if ($serialFromKey !== '') {
+                    $serial = $serialFromKey;
+                }
             }
 
             if (isset($terminalConfig['label'])) {
                 $label = trim((string) $terminalConfig['label']);
-            } elseif (is_string($key) && $key !== '' && $key !== $serial) {
-                $label = trim((string) $key);
+            } elseif ($keyRepresentsSerial) {
+                $labelFromKey = trim((string) $key);
+
+                if ($labelFromKey !== '' && $labelFromKey !== $serial) {
+                    $label = $labelFromKey;
+                }
             }
         } elseif (is_string($terminalConfig) || is_int($terminalConfig) || is_float($terminalConfig)) {
             $serial = trim((string) $terminalConfig);
