@@ -108,6 +108,7 @@ $storeError = null;
 $successMessage = null;
 $errorMessage = null;
 $storedCredential = null;
+$storedMerchantCode = '';
 
 if (!isset($secureStoreConfig['credential_file'], $secureStoreConfig['key_file'])) {
     $storeError = 'In der Konfiguration fehlen die Pfade für die sichere Ablage (secure_store.credential_file/key_file).';
@@ -118,6 +119,14 @@ if (!isset($secureStoreConfig['credential_file'], $secureStoreConfig['key_file']
             (string) $secureStoreConfig['key_file']
         );
         $storedCredential = $store->getApiCredential();
+
+        if ($storedCredential !== null) {
+            if (isset($storedCredential['merchant_code']) && $storedCredential['merchant_code'] !== '') {
+                $storedMerchantCode = (string) $storedCredential['merchant_code'];
+            } elseif (isset($storedCredential['merchant_id'])) {
+                $storedMerchantCode = (string) $storedCredential['merchant_id'];
+            }
+        }
     } catch (Throwable $exception) {
         $storeError = $exception->getMessage();
     }
@@ -129,14 +138,32 @@ if ($store instanceof CredentialStore && $_SERVER['REQUEST_METHOD'] === 'POST') 
     if ($action === 'clear') {
         $store->clear();
         $storedCredential = null;
+        $storedMerchantCode = '';
         $successMessage = 'Der gespeicherte API-Key wurde entfernt.';
     } else {
-        $merchantId = isset($_POST['merchant_id']) ? trim((string) $_POST['merchant_id']) : '';
+        $merchantCode = '';
+
+        if (isset($_POST['merchant_code'])) {
+            $merchantCode = trim((string) $_POST['merchant_code']);
+        } elseif (isset($_POST['merchant_id'])) {
+            $merchantCode = trim((string) $_POST['merchant_id']);
+        }
+
         $apiKey = isset($_POST['api_key']) ? (string) $_POST['api_key'] : '';
 
         try {
-            $store->saveApiKey($merchantId, $apiKey);
+            $store->saveApiKey($merchantCode, $apiKey);
             $storedCredential = $store->getApiCredential();
+            $storedMerchantCode = '';
+
+            if ($storedCredential !== null) {
+                if (isset($storedCredential['merchant_code']) && $storedCredential['merchant_code'] !== '') {
+                    $storedMerchantCode = (string) $storedCredential['merchant_code'];
+                } elseif (isset($storedCredential['merchant_id'])) {
+                    $storedMerchantCode = (string) $storedCredential['merchant_id'];
+                }
+            }
+
             $successMessage = 'API-Key wurde sicher gespeichert und steht jetzt in der Anwendung zur Verfügung.';
         } catch (Throwable $exception) {
             $errorMessage = $exception->getMessage();
@@ -341,7 +368,7 @@ function escape(string $value): string
     <h1>API-Key sicher hinterlegen</h1>
 
     <p>
-        Melden Sie sich in Ihrem SumUp-Händlerkonto unter <a href="https://me.sumup.com/developers" target="_blank" rel="noreferrer noopener">developers</a> an, kopieren Sie dort den API-Key (Personal Access Token) und fügen Sie ihn unten ein.
+        Melden Sie sich in Ihrem SumUp-Händlerkonto unter <a href="https://me.sumup.com/developers" target="_blank" rel="noreferrer noopener">developers</a> an, kopieren Sie dort den API-Key (Personal Access Token) und notieren Sie Ihren Merchant-Code (sichtbar in der URL, z.&nbsp;B. <code>DE1234</code>). Tragen Sie beide Angaben unten ein.
         Die Anwendung verschlüsselt den Schlüssel lokal und nutzt ihn anschließend automatisch für Terminal-Zahlungen.
     </p>
 
@@ -368,13 +395,13 @@ function escape(string $value): string
     <?php if ($store instanceof CredentialStore): ?>
         <form method="post">
             <label>
-                Händler-E-Mail oder Referenz (optional)
-                <input type="text" name="merchant_id" value="<?= $storedCredential !== null ? escape($storedCredential['merchant_id']) : '' ?>" placeholder="z. B. meine-filiale@example.com">
+                SumUp Merchant-Code
+                <input type="text" name="merchant_code" value="<?= $storedMerchantCode !== '' ? escape($storedMerchantCode) : '' ?>" placeholder="z. B. DE1234" required>
             </label>
 
             <label>
                 SumUp API-Key
-                <input type="password" name="api_key" autocomplete="off" placeholder="su_pk_..." required>
+                <input type="password" name="api_key" autocomplete="off" placeholder="sum_sk_..." required>
             </label>
 
             <button type="submit" name="action" value="save">API-Key speichern</button>
@@ -384,7 +411,7 @@ function escape(string $value): string
             <div class="alert info" style="margin-top: 1.5rem;">
                 <strong>Aktuell gespeicherter Schlüssel</strong>
                 <p>
-                    <?= $storedCredential['merchant_id'] !== '' ? 'Händler: ' . escape($storedCredential['merchant_id']) . '<br>' : '' ?>
+                    <?= $storedMerchantCode !== '' ? 'Merchant-Code: ' . escape($storedMerchantCode) . '<br>' : '' ?>
                     Zuletzt aktualisiert: <?= isset($storedCredential['updated_at']) ? escape($storedCredential['updated_at']) : 'unbekannt' ?>
                 </p>
                 <div class="actions">

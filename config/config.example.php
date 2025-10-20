@@ -10,6 +10,8 @@ return [
         'api_key' => '',
         // For OAuth set auth_method to "oauth" and place the access token below instead
         'access_token' => 'your-oauth-access-token-here',
+        // Required merchant code of your SumUp account (visible in the SumUp dashboard URL, e.g. DE1234)
+        'merchant_code' => 'YOUR-MERCHANT-CODE',
         // Default currency in ISO 4217 format
         'currency' => 'EUR',
         // Configure one or multiple SumUp terminals that can receive payments from the web UI

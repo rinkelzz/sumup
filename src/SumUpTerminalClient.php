@@ -13,12 +13,17 @@ final class SumUpTerminalClient
     public function __construct(
         private readonly string $credential,
         private readonly string $terminalSerial,
-        private readonly string $authMethod = 'api_key'
+        private readonly string $authMethod = 'api_key',
+        private readonly string $merchantCode = ''
     ) {
         self::assertCredential($credential, $this->authMethod);
 
         if ($terminalSerial === '') {
             throw new RuntimeException('Missing SumUp terminal serial number.');
+        }
+
+        if ($this->merchantCode === '') {
+            throw new RuntimeException('Missing SumUp merchant code.');
         }
     }
 
@@ -32,18 +37,77 @@ final class SumUpTerminalClient
      *     response_raw:string
      * }
      */
-    public static function listTerminals(string $credential, string $authMethod = 'api_key'): array
+    public static function listTerminals(
+        string $credential,
+        string $authMethod = 'api_key',
+        ?string $merchantCode = null
+    ): array
     {
         self::assertCredential($credential, $authMethod);
 
-        $endpoint = sprintf('%s/me/terminals?limit=200', self::API_BASE_URL);
+        $merchantCode = trim((string) $merchantCode);
 
-        return self::requestJson(
-            $endpoint,
+        if ($merchantCode === '') {
+            throw new RuntimeException('Missing SumUp merchant code.');
+        }
+
+        $primaryEndpoint = sprintf(
+            '%s/me/terminals?limit=200&merchant_code=%s',
+            self::API_BASE_URL,
+            rawurlencode($merchantCode)
+        );
+        $primaryResponse = self::requestJson(
+            $primaryEndpoint,
             $credential,
             $authMethod,
-            'GET'
+            'GET',
+            null,
+            [
+                'merchant_code' => $merchantCode,
+            ]
         );
+
+        if ($primaryResponse['status'] !== 404 || $authMethod !== 'api_key') {
+            return $primaryResponse;
+        }
+
+        $fallbackEndpoint = sprintf(
+            '%s/me/merchant-terminals?limit=200&merchant_code=%s',
+            self::API_BASE_URL,
+            rawurlencode($merchantCode)
+        );
+        $fallbackResponse = self::requestJson(
+            $fallbackEndpoint,
+            $credential,
+            $authMethod,
+            'GET',
+            null,
+            [
+                'merchant_code' => $merchantCode,
+            ]
+        );
+
+        if (!isset($fallbackResponse['request']) || !is_array($fallbackResponse['request'])) {
+            $fallbackResponse['request'] = [];
+        }
+
+        $previousAttempt = [
+            'status' => $primaryResponse['status'],
+            'url' => $primaryResponse['request']['url'] ?? $primaryEndpoint,
+            'method' => $primaryResponse['request']['method'] ?? 'GET',
+            'merchant_code' => $merchantCode,
+            'response' => $primaryResponse['body'],
+            'response_raw' => $primaryResponse['response_raw'],
+        ];
+
+        if (isset($primaryResponse['request']['headers'])) {
+            $previousAttempt['headers'] = $primaryResponse['request']['headers'];
+        }
+
+        $fallbackResponse['request']['note'] = 'Fallback auf /me/merchant-terminals, da /me/terminals mit HTTP 404 geantwortet hat.';
+        $fallbackResponse['request']['previous_attempts'] = [$previousAttempt];
+
+        return $fallbackResponse;
     }
 
     /**
@@ -92,9 +156,10 @@ final class SumUpTerminalClient
         }
 
         $endpoint = sprintf(
-            '%s/me/terminals/%s/transactions',
+            '%s/me/terminals/%s/transactions?merchant_code=%s',
             self::API_BASE_URL,
-            rawurlencode($this->terminalSerial)
+            rawurlencode($this->terminalSerial),
+            rawurlencode($this->merchantCode)
         );
 
         return self::requestJson(
@@ -105,6 +170,7 @@ final class SumUpTerminalClient
             $payload,
             [
                 'terminal_serial' => $this->terminalSerial,
+                'merchant_code' => $this->merchantCode,
             ]
         );
     }

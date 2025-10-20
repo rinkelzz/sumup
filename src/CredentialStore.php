@@ -29,7 +29,7 @@ final class CredentialStore
     }
 
     /**
-     * @return array{merchant_id: string, api_key: string, updated_at?: string}|null
+     * @return array{merchant_code: string, merchant_id: string, api_key: string, updated_at?: string}|null
      */
     public function getApiCredential(): ?array
     {
@@ -53,8 +53,17 @@ final class CredentialStore
             return null;
         }
 
+        $merchantCode = '';
+
+        if (isset($data['merchant_code'])) {
+            $merchantCode = (string) $data['merchant_code'];
+        } elseif (isset($data['merchant_id'])) {
+            $merchantCode = (string) $data['merchant_id'];
+        }
+
         $result = [
-            'merchant_id' => isset($data['merchant_id']) ? (string) $data['merchant_id'] : '',
+            'merchant_code' => $merchantCode,
+            'merchant_id' => isset($data['merchant_id']) ? (string) $data['merchant_id'] : $merchantCode,
             'api_key' => $apiKey,
         ];
 
@@ -65,10 +74,14 @@ final class CredentialStore
         return $result;
     }
 
-    public function saveApiKey(string $merchantId, string $apiKey): void
+    public function saveApiKey(string $merchantCode, string $apiKey): void
     {
-        $merchantId = trim($merchantId);
+        $merchantCode = trim($merchantCode);
         $apiKey = trim($apiKey);
+
+        if ($merchantCode === '') {
+            throw new RuntimeException('Merchant-Code darf nicht leer sein.');
+        }
 
         if ($apiKey === '') {
             throw new RuntimeException('API-Key darf nicht leer sein.');
@@ -83,7 +96,8 @@ final class CredentialStore
         $ciphertext = sodium_crypto_secretbox($apiKey, $nonce, $key);
 
         $payload = [
-            'merchant_id' => $merchantId,
+            'merchant_code' => $merchantCode,
+            'merchant_id' => $merchantCode,
             'nonce' => base64_encode($nonce),
             'ciphertext' => base64_encode($ciphertext),
             'updated_at' => (new \DateTimeImmutable('now'))->format('c'),

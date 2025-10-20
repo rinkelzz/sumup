@@ -104,6 +104,8 @@ foreach (['auth', 'log', 'secure_store'] as $section) {
  *         auth_method?: string,
  *         access_token?: string,
  *         api_key?: string,
+ *         merchant_code?: string,
+ *         merchant_id?: string,
  *         currency?: string,
  *         terminal_serial?: string,
  *         terminal_label?: string,
@@ -157,6 +159,35 @@ if ($authMethod === 'api_key' && $apiKey === '' && $storedCredentialDetails !== 
     $credential = $apiKey;
 }
 
+$merchantCodeSource = 'config';
+$merchantCode = trim((string) ($sumUpConfig['merchant_code'] ?? ''));
+
+if ($merchantCode === '') {
+    $merchantCodeSource = 'missing';
+}
+
+if ($merchantCode === '' && isset($sumUpConfig['merchant_id'])) {
+    $merchantCode = trim((string) $sumUpConfig['merchant_id']);
+
+    if ($merchantCode !== '') {
+        $merchantCodeSource = 'legacy_config';
+    }
+}
+
+if ($merchantCode === '' && $storedCredentialDetails !== null) {
+    if (isset($storedCredentialDetails['merchant_code'])) {
+        $merchantCode = trim((string) $storedCredentialDetails['merchant_code']);
+        if ($merchantCode !== '') {
+            $merchantCodeSource = 'secure_store';
+        }
+    } elseif (isset($storedCredentialDetails['merchant_id'])) {
+        $merchantCode = trim((string) $storedCredentialDetails['merchant_id']);
+        if ($merchantCode !== '') {
+            $merchantCodeSource = 'secure_store_legacy';
+        }
+    }
+}
+
 if ($credential === '') {
     if ($authMethod === 'oauth') {
         renderFatalError('Kein OAuth Access Token konfiguriert. Bitte ergänzen Sie config/config.php.');
@@ -174,6 +205,19 @@ if ($credential === '') {
 if ($authMethod === 'api_key' && $credential !== '' && str_starts_with($credential, 'sum_pk_')) {
     $configurationWarnings[] = 'Der eingetragene SumUp-Schlüssel beginnt mit "sum_pk_". Für Terminal-Aufrufe benötigen Sie den geheimen Schlüssel mit dem Präfix "sum_sk_" (Personal Access Token).';
 }
+
+if ($merchantCode === '') {
+    renderFatalError('Kein SumUp Merchant-Code konfiguriert. Bitte ergänzen Sie "sumup.merchant_code" in config/config.php oder tragen Sie den Code über anmeldung.php ein.');
+}
+
+if ($merchantCodeSource === 'legacy_config') {
+    $configurationWarnings[] = 'Der Merchant-Code wird derzeit aus dem veralteten Feld "sumup.merchant_id" geladen. Bitte tragen Sie ihn künftig unter "sumup.merchant_code" ein.';
+}
+
+if (in_array($merchantCodeSource, ['secure_store', 'secure_store_legacy'], true) && trim((string) ($sumUpConfig['merchant_code'] ?? '')) === '') {
+    $configurationWarnings[] = 'Der Merchant-Code wurde aus der sicheren Ablage übernommen. Tragen Sie ihn zusätzlich in config/config.php ein, falls Sie mehrere Händlerkonten verwenden möchten.';
+}
+
 $defaultTerminalSerial = (string) ($sumUpConfig['terminal_serial'] ?? '');
 $defaultTerminalLabel = (string) ($sumUpConfig['terminal_label'] ?? '');
 $currency = (string) ($sumUpConfig['currency'] ?? 'EUR');
@@ -347,7 +391,7 @@ function writeTransactionLog(
 
 if ($action === 'discover_terminals') {
     try {
-        $response = SumUpTerminalClient::listTerminals($credential, $authMethod);
+        $response = SumUpTerminalClient::listTerminals($credential, $authMethod, $merchantCode);
 
         $terminalDiscoveryDebug = [
             'http_status' => $response['status'],
@@ -443,6 +487,12 @@ if ($action === 'discover_terminals') {
 
             if ($response['status'] === 404) {
                 $terminalDiscoveryHints[] = 'SumUp meldet „Not Found“. Stellen Sie sicher, dass Terminal Cloud Requests für Ihr Händlerkonto freigeschaltet sind.';
+
+                if ($authMethod === 'api_key') {
+                    $terminalDiscoveryHints[] = 'Beim Einsatz von API-Keys liefert SumUp diesen Fehler häufig, wenn die Händlerfreischaltung für die Terminal-API fehlt. Kontaktiere den SumUp-Support oder wechsle auf OAuth mit dem Scope „transactions.terminal“.';
+                } else {
+                    $terminalDiscoveryHints[] = 'Prüfen Sie, ob das verwendete OAuth-Token noch gültig ist und den Scope „transactions.terminal“ enthält.';
+                }
             }
         }
     } catch (Throwable $exception) {
@@ -476,7 +526,7 @@ if ($action === 'send_payment') {
 
     if ($error === null && $environmentErrors === []) {
         try {
-            $client = new SumUpTerminalClient($credential, $selectedTerminalSerial, $authMethod);
+            $client = new SumUpTerminalClient($credential, $selectedTerminalSerial, $authMethod, $merchantCode);
             $response = $client->sendPayment($amount, $currency, $externalId, $description, $tipAmount);
 
             $debugDetails = [
@@ -825,8 +875,8 @@ if ($action === 'send_payment') {
                 <div class="alert info">
                     <strong>API-Key geladen</strong>
                     <p>
-                        Der hinterlegte Schlüssel<?= $storedCredentialDetails['merchant_id'] !== ''
-                            ? ' für ' . htmlspecialchars($storedCredentialDetails['merchant_id'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8')
+                        Der hinterlegte Schlüssel<?= $storedCredentialDetails['merchant_code'] !== ''
+                            ? ' für ' . htmlspecialchars($storedCredentialDetails['merchant_code'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8')
                             : '' ?> wurde automatisch verwendet.
                         <?php if (isset($storedCredentialDetails['updated_at']) && $storedCredentialDetails['updated_at'] !== ''): ?>
                             <br>
