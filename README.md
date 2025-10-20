@@ -21,6 +21,7 @@ Dieses Projekt stellt eine einfache PHP-Weboberfläche bereit, mit der du den Re
    - Assoziatives Array mit der Seriennummer als Schlüssel und einem Array mit zusätzlichen Angaben, etwa `['label' => 'Tresen']`.
    Leerzeichen werden automatisch entfernt; fehlende Labels werden durch die Seriennummer ersetzt.
    Sollte das Dashboard weiterhin keine Auswahl anbieten, prüfe die gelben Konfigurationshinweise oberhalb des Formulars – sie nennen die betroffenen Einträge in `config/config.php`.
+   Alternativ kannst du die Seriennummern direkt aus SumUp abrufen (siehe Abschnitt „Terminals automatisch abrufen“).
 4. Passe optional die Standardwährung an (ISO-4217-Code, z. B. `EUR`).
 5. Ersetze die Beispiel-Zugangsdaten durch eigene Benutzer und `password_hash`-Werte.
 6. Lege bei Bedarf einen alternativen Speicherort für das Transaktionsprotokoll fest.
@@ -38,6 +39,12 @@ Anstatt den SumUp-API-Key in `config/config.php` abzulegen, kannst du ihn nach d
 4. Kehre zur Kasse (`index.php`) zurück. Die Anwendung lädt den Schlüssel automatisch und zeigt an, wann er zuletzt aktualisiert wurde.
 
 Zum Löschen des gespeicherten API-Keys nutze die entsprechende Schaltfläche in `anmeldung.php`. Achte darauf, dass dein Webserver Schreibrechte auf das `var/`-Verzeichnis besitzt.
+
+## Terminals automatisch abrufen
+
+Sobald ein gültiger API-Key oder ein OAuth-Access-Token hinterlegt ist, kannst du in der Kassenoberfläche auf **„Terminals aus SumUp laden“** klicken. Die Anwendung ruft dann den Endpoint [`GET /v0.1/me/terminals`](https://developer.sumup.com/terminal-api) auf und listet alle dem Händlerkonto zugeordneten Geräte inklusive Seriennummer, optionalem Label, Modell und Status auf.
+
+Nutze diese Übersicht, um neue Geräte schnell in `config/config.php` einzutragen oder um zu prüfen, ob ein Terminal für Cloud-Transaktionen freigeschaltet ist. Schlägt der Abruf fehl, zeigt die Oberfläche den HTTP-Status, die komplette API-Antwort und Hinweise zur Fehlerbehebung an (z. B. fehlende Berechtigungen oder inaktive Terminals).
 
 ## Authentifizierung bei SumUp
 

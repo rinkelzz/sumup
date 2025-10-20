@@ -271,6 +271,17 @@ if ($terminalOptions !== []) {
     $selectedTerminalLabel = $terminalOptions[0]['label'];
 }
 
+$terminalDiscoveryResult = null;
+$terminalDiscoveryError = null;
+$terminalDiscoveryHints = [];
+$terminalDiscoveryDebug = null;
+
+$action = '';
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    $action = (string) ($_POST['action'] ?? 'send_payment');
+}
+
 $logConfig = $config['log'] ?? [];
 $transactionsLogFile = (string) ($logConfig['transactions_file'] ?? (__DIR__ . '/../var/transactions.log'));
 
@@ -334,7 +345,112 @@ function writeTransactionLog(
     return file_put_contents($logFile, $line, FILE_APPEND | LOCK_EX) !== false;
 }
 
-if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+if ($action === 'discover_terminals') {
+    try {
+        $response = SumUpTerminalClient::listTerminals($credential, $authMethod);
+
+        $terminalDiscoveryDebug = [
+            'http_status' => $response['status'],
+            'response' => $response['body'],
+        ];
+
+        if (isset($response['request'])) {
+            $terminalDiscoveryDebug['request'] = $response['request'];
+        }
+
+        if (isset($response['response_raw'])) {
+            $terminalDiscoveryDebug['response_raw'] = $response['response_raw'];
+        }
+
+        if ($response['status'] >= 200 && $response['status'] < 300) {
+            $items = [];
+            $body = $response['body'];
+
+            if (isset($body['items']) && is_array($body['items'])) {
+                $items = $body['items'];
+            } elseif (isset($body['terminal']) && is_array($body['terminal'])) {
+                $items = [$body['terminal']];
+            }
+
+            $terminals = [];
+
+            foreach ($items as $item) {
+                if (!is_array($item)) {
+                    continue;
+                }
+
+                $serial = '';
+                if (isset($item['serial_number'])) {
+                    $serial = trim((string) $item['serial_number']);
+                } elseif (isset($item['serial'])) {
+                    $serial = trim((string) $item['serial']);
+                }
+
+                if ($serial === '') {
+                    continue;
+                }
+
+                $label = '';
+                if (isset($item['label'])) {
+                    $label = trim((string) $item['label']);
+                }
+
+                $model = '';
+                if (isset($item['model'])) {
+                    $model = trim((string) $item['model']);
+                } elseif (isset($item['device_type'])) {
+                    $model = trim((string) $item['device_type']);
+                }
+
+                $status = '';
+                if (isset($item['status'])) {
+                    $status = trim((string) $item['status']);
+                } elseif (isset($item['state'])) {
+                    $status = trim((string) $item['state']);
+                }
+
+                $terminals[] = [
+                    'serial' => $serial,
+                    'label' => $label !== '' ? $label : $serial,
+                    'model' => $model,
+                    'status' => $status,
+                ];
+            }
+
+            $count = count($terminals);
+            $message = $count === 0
+                ? 'Keine Terminals gefunden. Prüfen Sie, ob die Geräte im SumUp-Dashboard dem Konto zugeordnet sind.'
+                : sprintf('%d Terminal%s gefunden.', $count, $count === 1 ? '' : 's');
+
+            if ($count === 0) {
+                $terminalDiscoveryHints[] = 'Kontrollieren Sie im SumUp-Dashboard unter „Terminals“, ob Geräte mit Ihrem Händlerkonto verknüpft sind und Cloud-Transaktionen unterstützen.';
+            }
+
+            $terminalDiscoveryResult = [
+                'title' => 'Terminal-Liste abgerufen',
+                'message' => $message,
+                'items' => $terminals,
+            ];
+        } else {
+            $terminalDiscoveryError = sprintf(
+                'Abruf der Terminals fehlgeschlagen (HTTP %d).',
+                $response['status']
+            );
+
+            if ($response['status'] === 401 || $response['status'] === 403) {
+                $terminalDiscoveryHints[] = 'Die SumUp-API lehnt den Zugriff ab. Prüfen Sie API-Key oder OAuth-Token sowie deren Berechtigungen.';
+            }
+
+            if ($response['status'] === 404) {
+                $terminalDiscoveryHints[] = 'SumUp meldet „Not Found“. Stellen Sie sicher, dass Terminal Cloud Requests für Ihr Händlerkonto freigeschaltet sind.';
+            }
+        }
+    } catch (Throwable $exception) {
+        $terminalDiscoveryError = $exception->getMessage();
+    }
+}
+
+if ($action === 'send_payment') {
     $amount = isset($_POST['amount']) ? (float) str_replace(',', '.', (string) $_POST['amount']) : 0.0;
     $tipAmount = isset($_POST['tip_amount']) && $_POST['tip_amount'] !== ''
         ? (float) str_replace(',', '.', (string) $_POST['tip_amount'])
@@ -516,6 +632,34 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             background: #1d4ed8;
         }
 
+        button:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+
+        form.secondary-form {
+            display: block;
+            margin-bottom: 1.5rem;
+        }
+
+        .secondary-button {
+            background: transparent;
+            color: #2563eb;
+            border: 2px solid #2563eb;
+        }
+
+        .secondary-button:hover,
+        .secondary-button:focus {
+            background: #2563eb;
+            color: #fff;
+        }
+
+        .secondary-button:disabled {
+            background: transparent;
+            color: rgba(37, 99, 235, 0.6);
+            border-color: rgba(37, 99, 235, 0.4);
+        }
+
         .alert {
             border-radius: 0.75rem;
             padding: 1rem 1.25rem;
@@ -544,6 +688,33 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             background: #fef3c7;
             color: #92400e;
             border: 1px solid #fde68a;
+        }
+
+        .terminal-list {
+            list-style: none;
+            margin: 0.5rem 0 0;
+            padding: 0;
+        }
+
+        .terminal-list li {
+            padding: 0.5rem 0;
+            border-top: 1px solid #e5e7eb;
+        }
+
+        .terminal-list li:first-child {
+            border-top: none;
+        }
+
+        .terminal-list strong {
+            display: block;
+            font-size: 1rem;
+            color: #1f2937;
+        }
+
+        .terminal-list span {
+            display: block;
+            font-size: 0.9rem;
+            color: #6b7280;
         }
 
         pre {
@@ -583,6 +754,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 border: 1px solid #374151;
             }
 
+            .secondary-button {
+                color: #93c5fd;
+                border-color: #60a5fa;
+            }
+
+            .secondary-button:hover,
+            .secondary-button:focus {
+                color: #0f172a;
+                background: #60a5fa;
+            }
+
+            .secondary-button:disabled {
+                color: rgba(147, 197, 253, 0.5);
+                border-color: rgba(96, 165, 250, 0.4);
+            }
+
             .alert.success {
                 background: rgba(22, 101, 52, 0.2);
                 border-color: rgba(22, 101, 52, 0.4);
@@ -603,6 +790,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             .alert.error {
                 background: rgba(153, 27, 27, 0.2);
                 border-color: rgba(153, 27, 27, 0.4);
+            }
+
+            .terminal-list li {
+                border-top-color: #374151;
+            }
+
+            .terminal-list strong {
+                color: #f9fafb;
+            }
+
+            .terminal-list span {
+                color: #9ca3af;
             }
 
             pre {
@@ -665,6 +864,57 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             </div>
         <?php endforeach; ?>
 
+        <form method="post" class="secondary-form">
+            <input type="hidden" name="action" value="discover_terminals">
+            <button type="submit" class="secondary-button"<?= $environmentErrors !== [] ? ' disabled' : '' ?>>Terminals aus SumUp laden</button>
+        </form>
+
+        <?php if ($terminalDiscoveryError !== null): ?>
+            <div class="alert error">
+                <strong>Terminal-Abruf:</strong>
+                <div><?= htmlspecialchars($terminalDiscoveryError, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') ?></div>
+            </div>
+        <?php elseif ($terminalDiscoveryResult !== null): ?>
+            <div class="alert info">
+                <strong><?= htmlspecialchars($terminalDiscoveryResult['title'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') ?></strong>
+                <p><?= htmlspecialchars($terminalDiscoveryResult['message'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') ?></p>
+                <?php if (!empty($terminalDiscoveryResult['items'])): ?>
+                    <ul class="terminal-list">
+                        <?php foreach ($terminalDiscoveryResult['items'] as $terminal): ?>
+                            <li>
+                                <strong><?= htmlspecialchars($terminal['label'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') ?></strong>
+                                <span>Seriennummer: <?= htmlspecialchars($terminal['serial'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') ?></span>
+                                <?php if (($terminal['model'] ?? '') !== ''): ?>
+                                    <span>Modell: <?= htmlspecialchars((string) $terminal['model'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') ?></span>
+                                <?php endif; ?>
+                                <?php if (($terminal['status'] ?? '') !== ''): ?>
+                                    <span>Status: <?= htmlspecialchars((string) $terminal['status'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') ?></span>
+                                <?php endif; ?>
+                            </li>
+                        <?php endforeach; ?>
+                    </ul>
+                <?php endif; ?>
+            </div>
+        <?php endif; ?>
+
+        <?php if (!empty($terminalDiscoveryHints)): ?>
+            <div class="alert info">
+                <strong>Hinweis:</strong>
+                <ul>
+                    <?php foreach ($terminalDiscoveryHints as $hint): ?>
+                        <li><?= htmlspecialchars($hint, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') ?></li>
+                    <?php endforeach; ?>
+                </ul>
+            </div>
+        <?php endif; ?>
+
+        <?php if ($terminalDiscoveryDebug !== null): ?>
+            <details>
+                <summary>API-Antwort (Terminal-Abruf)</summary>
+                <pre><?= htmlspecialchars(json_encode($terminalDiscoveryDebug, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE), ENT_NOQUOTES | ENT_SUBSTITUTE, 'UTF-8') ?></pre>
+            </details>
+        <?php endif; ?>
+
         <?php if ($error !== null): ?>
             <div class="alert error">
                 <strong>Fehler:</strong>
@@ -696,6 +946,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         <?php endif; ?>
 
         <form method="post">
+            <input type="hidden" name="action" value="send_payment">
             <?php if ($terminalOptions === []): ?>
                 <label>
                     Terminal

@@ -15,21 +15,35 @@ final class SumUpTerminalClient
         private readonly string $terminalSerial,
         private readonly string $authMethod = 'api_key'
     ) {
-        if (!in_array($this->authMethod, ['api_key', 'oauth'], true)) {
-            throw new RuntimeException('Unsupported SumUp authentication method.');
-        }
-
-        if ($credential === '') {
-            throw new RuntimeException('Missing SumUp credentials.');
-        }
-
-        if ($this->authMethod === 'api_key' && str_starts_with($credential, 'sum_pk_')) {
-            throw new RuntimeException('Der konfigurierte SumUp-Schlüssel beginnt mit "sum_pk_". Bitte verwenden Sie den geheimen API-Key mit dem Präfix "sum_sk_".');
-        }
+        self::assertCredential($credential, $this->authMethod);
 
         if ($terminalSerial === '') {
             throw new RuntimeException('Missing SumUp terminal serial number.');
         }
+    }
+
+    /**
+     * Retrieves the list of terminals available for the authenticated merchant account.
+     *
+     * @return array{
+     *     status:int,
+     *     body:array<string,mixed>,
+     *     request:array<string,mixed>,
+     *     response_raw:string
+     * }
+     */
+    public static function listTerminals(string $credential, string $authMethod = 'api_key'): array
+    {
+        self::assertCredential($credential, $authMethod);
+
+        $endpoint = sprintf('%s/me/terminals?limit=200', self::API_BASE_URL);
+
+        return self::requestJson(
+            $endpoint,
+            $credential,
+            $authMethod,
+            'GET'
+        );
     }
 
     /**
@@ -83,11 +97,22 @@ final class SumUpTerminalClient
             rawurlencode($this->terminalSerial)
         );
 
-        return $this->postJson($endpoint, $payload);
+        return self::requestJson(
+            $endpoint,
+            $this->credential,
+            $this->authMethod,
+            'POST',
+            $payload,
+            [
+                'terminal_serial' => $this->terminalSerial,
+            ]
+        );
     }
 
     /**
-     * @param array<string,mixed> $payload
+     * @param array<string,mixed>|null $payload
+     * @param array<string,mixed>      $extraRequestInfo
+     *
      * @return array{
      *     status:int,
      *     body:array<string,mixed>,
@@ -95,8 +120,14 @@ final class SumUpTerminalClient
      *     response_raw:string
      * }
      */
-    private function postJson(string $url, array $payload): array
-    {
+    private static function requestJson(
+        string $url,
+        string $credential,
+        string $authMethod,
+        string $method,
+        ?array $payload = null,
+        array $extraRequestInfo = []
+    ): array {
         if (!extension_loaded('curl')) {
             throw new RuntimeException('Die PHP-Extension "curl" wird für die Kommunikation mit SumUp benötigt.');
         }
@@ -106,18 +137,31 @@ final class SumUpTerminalClient
             throw new RuntimeException('Unable to initialise cURL.');
         }
 
-        $encodedPayload = json_encode($payload, JSON_THROW_ON_ERROR);
+        $encodedPayload = null;
+        if ($payload !== null) {
+            $encodedPayload = json_encode($payload, JSON_THROW_ON_ERROR);
+        }
 
-        curl_setopt_array($ch, [
+        $headers = [
+            'Accept: application/json',
+            sprintf('Authorization: %s', self::buildAuthorizationHeaderFor($credential)),
+        ];
+
+        if ($encodedPayload !== null) {
+            $headers[] = 'Content-Type: application/json';
+        }
+
+        $options = [
             CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_POST => true,
-            CURLOPT_POSTFIELDS => $encodedPayload,
-            CURLOPT_HTTPHEADER => [
-                'Content-Type: application/json',
-                'Accept: application/json',
-                sprintf('Authorization: %s', $this->buildAuthorizationHeader()),
-            ],
-        ]);
+            CURLOPT_HTTPHEADER => $headers,
+            CURLOPT_CUSTOMREQUEST => strtoupper($method),
+        ];
+
+        if ($encodedPayload !== null) {
+            $options[CURLOPT_POSTFIELDS] = $encodedPayload;
+        }
+
+        curl_setopt_array($ch, $options);
 
         $responseBody = curl_exec($ch);
         if ($responseBody === false) {
@@ -137,33 +181,56 @@ final class SumUpTerminalClient
             ];
         }
 
+        $requestDetails = array_merge(
+            [
+                'url' => $url,
+                'method' => strtoupper($method),
+                'auth_method' => $authMethod,
+                'headers' => [
+                    'Accept' => 'application/json',
+                    'Authorization' => sprintf('Bearer %s', self::redactCredential($credential)),
+                ],
+            ],
+            $extraRequestInfo
+        );
+
+        if ($encodedPayload !== null && $payload !== null) {
+            $requestDetails['payload'] = $payload;
+            $requestDetails['headers']['Content-Type'] = 'application/json';
+        }
+
         return [
             'status' => $statusCode,
             'body' => $decoded,
-            'request' => [
-                'url' => $url,
-                'terminal_serial' => $this->terminalSerial,
-                'auth_method' => $this->authMethod,
-                'payload' => $payload,
-                'headers' => [
-                    'Content-Type' => 'application/json',
-                    'Accept' => 'application/json',
-                    'Authorization' => sprintf('Bearer %s', $this->redactCredential()),
-                ],
-            ],
+            'request' => $requestDetails,
             'response_raw' => $responseBody,
         ];
     }
 
-    private function buildAuthorizationHeader(): string
+    private static function assertCredential(string $credential, string $authMethod): void
     {
-        // SumUp accepts API keys and OAuth tokens via Bearer authorization.
-        return 'Bearer ' . $this->credential;
+        if (!in_array($authMethod, ['api_key', 'oauth'], true)) {
+            throw new RuntimeException('Unsupported SumUp authentication method.');
+        }
+
+        if ($credential === '') {
+            throw new RuntimeException('Missing SumUp credentials.');
+        }
+
+        if ($authMethod === 'api_key' && str_starts_with($credential, 'sum_pk_')) {
+            throw new RuntimeException('Der konfigurierte SumUp-Schlüssel beginnt mit "sum_pk_". Bitte verwenden Sie den geheimen API-Key mit dem Präfix "sum_sk_".');
+        }
     }
 
-    private function redactCredential(): string
+    private static function buildAuthorizationHeaderFor(string $credential): string
     {
-        $length = strlen($this->credential);
+        // SumUp accepts API keys and OAuth tokens via Bearer authorization.
+        return 'Bearer ' . $credential;
+    }
+
+    private static function redactCredential(string $credential): string
+    {
+        $length = strlen($credential);
 
         if ($length === 0) {
             return '';
@@ -173,8 +240,8 @@ final class SumUpTerminalClient
             return str_repeat('•', $length);
         }
 
-        $start = substr($this->credential, 0, 4);
-        $end = substr($this->credential, -4);
+        $start = substr($credential, 0, 4);
+        $end = substr($credential, -4);
 
         return sprintf('%s%s%s', $start, str_repeat('•', $length - 8), $end);
     }
