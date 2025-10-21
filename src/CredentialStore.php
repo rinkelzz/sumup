@@ -30,6 +30,7 @@ final class CredentialStore
 
     /**
      * @return array{merchant_id: string, api_key: string, updated_at?: string}|null
+     *     `merchant_id` enthält optional den Händlercode (z. B. MCRNF79M) für Terminalabfragen.
      */
     public function getApiCredential(): ?array
     {
@@ -72,6 +73,10 @@ final class CredentialStore
 
         if ($apiKey === '') {
             throw new RuntimeException('API-Key darf nicht leer sein.');
+        }
+
+        if (str_starts_with($apiKey, 'sum_pk_')) {
+            throw new RuntimeException('Der eingegebene Schlüssel beginnt mit "sum_pk_". Bitte verwenden Sie den geheimen SumUp-API-Key mit dem Präfix "sum_sk_".');
         }
 
         $key = $this->loadOrCreateKey();
