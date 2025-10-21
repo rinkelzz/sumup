@@ -240,11 +240,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $errorMessage = 'Bitte geben Sie den Aktivierungscode ein, der auf dem Terminal angezeigt wird.';
     } else {
         try {
-            $client = new SumUpTerminalClient(
-                credential: $credential,
-                terminalSerial: $selectedTerminalSerial,
-                authMethod: $authMethod
-            );
+            $client = new SumUpTerminalClient($credential, $selectedTerminalSerial, $authMethod);
             $result = $client->activateTerminal($activationCode);
             $responseStatus = $result['status'];
             $responseBody = $result['body'];

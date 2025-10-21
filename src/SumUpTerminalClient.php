@@ -11,63 +11,26 @@ final class SumUpTerminalClient
 {
     private const API_BASE_URL = 'https://api.sumup.com/v0.1';
 
-    public function __construct(
-        private readonly string $credential,
-        private readonly string $terminalSerial,
-        private readonly string $authMethod = 'api_key'
-    ) {
-        self::assertCredential($credential, $this->authMethod);
+    private string $credential;
 
-        if ($terminalSerial === '') {
-            throw new RuntimeException('Missing SumUp terminal serial number.');
+    private string $terminalSerial;
+
+    private string $authMethod;
+
+    public function __construct(string $credential, string $terminalSerial, string $authMethod = 'api_key')
+    {
+        $authMethod = strtolower($authMethod);
+
+        if (!in_array($authMethod, ['api_key', 'oauth'], true)) {
+            throw new RuntimeException('Unsupported SumUp authentication method.');
         }
     }
 
-    /**
-     * Retrieves the list of terminals available for the authenticated merchant account.
-     *
-     * @param string|null $merchantCode Optional merchant code (e.g. "MCRNF79M") used by API-key discovery.
-     *
-     * @return array{
-     *     status:int,
-     *     body:array<string,mixed>,
-     *     request:array<string,mixed>,
-     *     response_raw:string
-     * }
-     */
-    public static function listTerminals(
-        string $credential,
-        string $authMethod = 'api_key',
-        ?string $merchantCode = null
-    ): array {
-        self::assertCredential($credential, $authMethod);
+        $credential = trim($credential);
+        $terminalSerial = trim($terminalSerial);
 
-        $merchantCode = $merchantCode !== null ? trim($merchantCode) : '';
-        $previousAttempts = [];
-
-        if ($authMethod === 'api_key' && $merchantCode !== '') {
-            $readersEndpoint = sprintf(
-                '%s/merchants/%s/readers?limit=200',
-                self::API_BASE_URL,
-                rawurlencode($merchantCode)
-            );
-
-            $readersResponse = self::requestJson(
-                $readersEndpoint,
-                $credential,
-                $authMethod,
-                'GET',
-                null,
-                [
-                    'merchant_code' => $merchantCode,
-                ]
-            );
-
-            if ($readersResponse['status'] !== 404) {
-                return $readersResponse;
-            }
-
-            $previousAttempts[] = self::summariseAttempt($readersResponse);
+        if ($credential === '') {
+            throw new RuntimeException('Missing SumUp credentials.');
         }
 
         $primaryEndpoint = sprintf('%s/me/terminals?limit=200', self::API_BASE_URL);
@@ -184,54 +147,9 @@ final class SumUpTerminalClient
             return self::attachPreviousAttempts($meActivateResponse, $previousAttempts);
         }
 
-        $previousAttempts[] = self::summariseAttempt($meActivateResponse);
-
-        $fallbackEndpoint = sprintf('%s/me/terminals', self::API_BASE_URL);
-        $fallbackResponse = self::requestJson(
-            $fallbackEndpoint,
-            $credential,
-            $authMethod,
-            'POST',
-            $payload,
-            [
-                'activation_code' => self::redactActivationCode($activationCode),
-                'note' => 'Fallback auf POST /me/terminals, da vorherige Aktivierungsaufrufe HTTP 404 geliefert haben.',
-            ]
-        );
-
-        return self::attachPreviousAttempts($fallbackResponse, $previousAttempts);
-    }
-
-    /**
-     * @param array<int, mixed> $arguments
-     *
-     * @return mixed
-     */
-    public function __call(string $name, array $arguments)
-    {
-        if ($name === 'activateTerminal') {
-            $activationCode = isset($arguments[0]) ? (string) $arguments[0] : '';
-            $merchantCode = isset($arguments[1]) ? (string) $arguments[1] : null;
-            $label = isset($arguments[2]) ? (string) $arguments[2] : null;
-
-            if ($merchantCode === '') {
-                $merchantCode = null;
-            }
-
-            if ($label === '') {
-                $label = null;
-            }
-
-            return self::activateTerminal(
-                $this->credential,
-                $this->authMethod,
-                $activationCode,
-                $merchantCode,
-                $label
-            );
-        }
-
-        throw new BadMethodCallException(sprintf('Call to undefined method %s::%s()', self::class, $name));
+        $this->credential = $credential;
+        $this->terminalSerial = $terminalSerial;
+        $this->authMethod = $authMethod;
     }
 
     /**
@@ -330,6 +248,31 @@ final class SumUpTerminalClient
      *
      * @param string $activationCode Activation code displayed on the terminal.
      *
+     * @return array{status:int, body:array<string,mixed>}
+     */
+    public function activateTerminal(string $activationCode): array
+    {
+        $activationCode = trim($activationCode);
+
+        if ($activationCode === '') {
+            throw new RuntimeException('Activation code must not be empty.');
+        }
+
+        $payload = [
+            'activation_code' => $activationCode,
+        ];
+
+        $endpoint = sprintf(
+            '%s/terminals/%s/activation',
+            self::API_BASE_URL,
+            rawurlencode($this->terminalSerial)
+        );
+
+        return $this->postJson($endpoint, $payload);
+    }
+
+    /**
+     * @param array<string,mixed> $payload
      * @return array{status:int, body:array<string,mixed>}
      */
     public function activateTerminal(string $activationCode): array
