@@ -3,8 +3,96 @@
 declare(strict_types=1);
 
 use App\TerminalStorage;
+use SumUp\BasicAuth;
 
+require_once __DIR__ . '/../src/BasicAuth.php';
 require_once __DIR__ . '/../src/TerminalStorage.php';
+
+function renderFatalError(string $message, int $statusCode = 500): void
+{
+    http_response_code($statusCode);
+    header('Content-Type: text/html; charset=UTF-8');
+
+    $safeMessage = htmlspecialchars($message, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+
+    echo <<<HTML
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="utf-8">
+    <title>Fehler – SumUp Terminal</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+        :root {
+            color-scheme: light dark;
+            font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+        }
+
+        body {
+            margin: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            background: #0f172a;
+            color: #f9fafb;
+            padding: 2rem;
+        }
+
+        .card {
+            background: #111827;
+            border-radius: 1rem;
+            padding: 2.5rem 2rem;
+            max-width: 32rem;
+            box-shadow: 0 1.5rem 3rem rgba(15, 23, 42, 0.35);
+        }
+
+        h1 {
+            margin-top: 0;
+            margin-bottom: 1rem;
+            font-size: 1.75rem;
+        }
+
+        p {
+            margin: 0;
+            line-height: 1.6;
+        }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <h1>Es ist ein Fehler aufgetreten</h1>
+        <p>{$safeMessage}</p>
+    </div>
+</body>
+</html>
+HTML;
+
+    exit;
+}
+
+$configPath = __DIR__ . '/../config/config.php';
+
+if (!file_exists($configPath)) {
+    renderFatalError('Konfigurationsdatei nicht gefunden. Bitte kopieren Sie config/config.example.php nach config/config.php.');
+}
+
+/**
+ * @var mixed $config
+ */
+$config = require $configPath;
+
+if (!is_array($config)) {
+    renderFatalError('Die Konfigurationsdatei muss ein Array zurückgeben. Bitte prüfen Sie config/config.php.');
+}
+
+$authConfig = $config['auth'] ?? null;
+
+if ($authConfig !== null && !is_array($authConfig)) {
+    renderFatalError('Der Abschnitt "auth" muss ein Array sein. Bitte korrigieren Sie config/config.php.');
+}
+
+BasicAuth::enforce($authConfig ?? []);
 
 try {
     $storage = new TerminalStorage(__DIR__ . '/../var/terminals.json');
