@@ -3,93 +3,8 @@
 declare(strict_types=1);
 
 use App\TerminalStorage;
-use SumUp\BasicAuth;
 
 require_once __DIR__ . '/../src/TerminalStorage.php';
-require_once __DIR__ . '/../src/BasicAuth.php';
-
-try {
-    $storage = new TerminalStorage(__DIR__ . '/../var/terminals.json');
-} catch (\Throwable $exception) {
-    http_response_code(500);
-    header('Content-Type: text/plain; charset=UTF-8');
-    echo 'Die Terminalverwaltung konnte nicht initialisiert werden: ' . $exception->getMessage();
-    exit;
-}
-
-/**
- * @param array<string, string> $data
- */
-function trimInput(array $data): array
-{
-    return array_map(
-        static function (string $value): string {
-            return trim($value);
-        },
-        $data
-    );
-}
-
-function maskCredential(string $credential): string
-{
-    $length = strlen($credential);
-
-    if ($length <= 8) {
-        return str_repeat('•', $length);
-    }
-
-    return substr($credential, 0, 6) . '…' . substr($credential, -4);
-}
-
-        .card {
-            background: #111827;
-            border-radius: 1rem;
-            padding: 2.5rem 2rem;
-            max-width: 32rem;
-            text-align: center;
-            box-shadow: 0 1.5rem 3rem rgba(15, 23, 42, 0.35);
-        }
-
-/**
- * @return array{value:int, formatted:string}
- */
-function convertAmountToMinorUnits(string $amount, int $minorUnit): array
-{
-    if ($minorUnit < 0 || $minorUnit > 6) {
-        throw new InvalidArgumentException('Die Anzahl der Nachkommastellen muss zwischen 0 und 6 liegen.');
-    }
-
-    $normalized = str_replace(',', '.', $amount);
-
-    if ($normalized === '' || !preg_match('/^\d+(?:\.\d+)?$/', $normalized)) {
-        throw new InvalidArgumentException('Der Betrag muss eine positive Zahl sein.');
-    }
-
-    [$whole, $fraction] = array_pad(explode('.', $normalized, 2), 2, '');
-
-    if ($minorUnit === 0 && $fraction !== '') {
-        throw new InvalidArgumentException('Für Beträge ohne Nachkommastellen darf keine Dezimalstelle angegeben werden.');
-    }
-
-    if (strlen($fraction) > $minorUnit) {
-        throw new InvalidArgumentException(sprintf('Maximal %d Nachkommastellen erlaubt.', $minorUnit));
-    }
-
-    $fraction = substr($fraction . str_repeat('0', $minorUnit), 0, $minorUnit);
-
-$authConfig = [];
-
-if (isset($config['auth'])) {
-    if (!is_array($config['auth'])) {
-        renderFatalError('Der Abschnitt "auth" muss ein Array sein. Bitte korrigieren Sie config/config.php.');
-    }
-
-    /** @var array{realm?: string, users?: array<string, string>} $authSection */
-    $authSection = $config['auth'];
-    $authConfig = $authSection;
-}
-
-BasicAuth::enforce($authConfig);
 
 try {
     $storage = new TerminalStorage(__DIR__ . '/../var/terminals.json');
@@ -131,6 +46,7 @@ function generateForeignTransactionId(): string
     } catch (\Throwable $exception) {
         return 'ft_' . uniqid();
     }
+}
 
 /**
  * @return array{value:int, formatted:string}
@@ -655,32 +571,32 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $payload
                 );
 
-                $httpError = $checkoutResult['status'] < 200 || $checkoutResult['status'] >= 300;
+                if ($checkoutResult['error'] !== null) {
+                    $errors[] = 'Die Zahlung konnte nicht gesendet werden: ' . $checkoutResult['error'];
+                } elseif ($checkoutResult['status'] >= 400) {
+                    $errorDetail = null;
 
-                if ($checkoutResult['error'] !== null || $httpError) {
-                    $details = [];
-
-                    if ($checkoutResult['error'] !== null) {
-                        $details[] = $checkoutResult['error'];
-                    }
-
-                    if ($httpError) {
-                        $httpMessage = sprintf('SumUp hat die Zahlung mit HTTP %d beantwortet.', $checkoutResult['status']);
-
-                        if (is_array($checkoutResult['body'])) {
-                            $bodyMessage = $checkoutResult['body']['message']
-                                ?? $checkoutResult['body']['error_message']
-                                ?? null;
-
-                            if (is_string($bodyMessage) && $bodyMessage !== '') {
-                                $httpMessage .= ' ' . $bodyMessage;
-                            }
+                    if (is_array($checkoutResult['body'])) {
+                        if (isset($checkoutResult['body']['message']) && $checkoutResult['body']['message'] !== '') {
+                            $errorDetail = (string) $checkoutResult['body']['message'];
+                        } elseif (isset($checkoutResult['body']['error_message']) && $checkoutResult['body']['error_message'] !== '') {
+                            $errorDetail = (string) $checkoutResult['body']['error_message'];
+                        } elseif (isset($checkoutResult['body']['error_code']) && $checkoutResult['body']['error_code'] !== '') {
+                            $errorDetail = 'Fehlercode: ' . (string) $checkoutResult['body']['error_code'];
                         }
-
-                        $details[] = $httpMessage;
                     }
 
-                    $errors[] = 'Die Zahlung konnte nicht gesendet werden: ' . implode(' ', $details);
+                    if ($errorDetail === null || $errorDetail === '') {
+                        $errorDetail = $checkoutResult['raw'] !== ''
+                            ? $checkoutResult['raw']
+                            : 'Unbekannte Fehlermeldung.';
+                    }
+
+                    $errors[] = sprintf(
+                        'Die Zahlung wurde von SumUp abgelehnt (HTTP-Status %d): %s',
+                        $checkoutResult['status'],
+                        $errorDetail
+                    );
                 } else {
                     $clientTransactionId = null;
 
@@ -723,7 +639,10 @@ if ($paymentForm['return_url'] === '' && $terminals !== []) {
     }
 }
 
-function h(?string $value): string
+/**
+ * @param mixed $value
+ */
+function h($value): string
 {
     return htmlspecialchars((string) $value, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
 }
