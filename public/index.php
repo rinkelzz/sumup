@@ -950,7 +950,8 @@ foreach ($terminals as $terminal) {
                 <input id="api_key" name="api_key" required value="<?= h($terminalForm['api_key']) ?>">
 
                 <label for="default_return_url">Standard-Return-URL (optional)</label>
-                <input id="default_return_url" name="default_return_url" value="<?= h($terminalForm['default_return_url']) ?>" placeholder="https://example.com/webhook">
+                <input id="default_return_url" name="default_return_url" value="<?= h($terminalForm['default_return_url']) ?>" placeholder="https://example.com/webhook.php">
+                <p class="muted">Tipp: Hinterlege in SumUp <code><?= h((string) ($_SERVER['HTTP_HOST'] ?? 'example.com')) ?>/webhook.php</code> als Return-URL für Webhooks.</p>
 
                 <div class="actions" style="margin-top: 1.5rem;">
                     <button type="submit">Terminal speichern</button>
