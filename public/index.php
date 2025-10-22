@@ -3,96 +3,8 @@
 declare(strict_types=1);
 
 use App\TerminalStorage;
-use SumUp\BasicAuth;
 
-require_once __DIR__ . '/../src/BasicAuth.php';
 require_once __DIR__ . '/../src/TerminalStorage.php';
-
-function renderFatalError(string $message, int $statusCode = 500): void
-{
-    http_response_code($statusCode);
-    header('Content-Type: text/html; charset=UTF-8');
-
-    $safeMessage = htmlspecialchars($message, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
-
-    echo <<<HTML
-<!DOCTYPE html>
-<html lang="de">
-<head>
-    <meta charset="utf-8">
-    <title>Fehler – SumUp Terminal</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <style>
-        :root {
-            color-scheme: light dark;
-            font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
-        }
-
-        body {
-            margin: 0;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            min-height: 100vh;
-            background: #0f172a;
-            color: #f9fafb;
-            padding: 2rem;
-        }
-
-        .card {
-            background: #111827;
-            border-radius: 1rem;
-            padding: 2.5rem 2rem;
-            max-width: 32rem;
-            box-shadow: 0 1.5rem 3rem rgba(15, 23, 42, 0.35);
-        }
-
-        h1 {
-            margin-top: 0;
-            margin-bottom: 1rem;
-            font-size: 1.75rem;
-        }
-
-        p {
-            margin: 0;
-            line-height: 1.6;
-        }
-    </style>
-</head>
-<body>
-    <div class="card">
-        <h1>Es ist ein Fehler aufgetreten</h1>
-        <p>{$safeMessage}</p>
-    </div>
-</body>
-</html>
-HTML;
-
-    exit;
-}
-
-$configPath = __DIR__ . '/../config/config.php';
-
-if (!file_exists($configPath)) {
-    renderFatalError('Konfigurationsdatei nicht gefunden. Bitte kopieren Sie config/config.example.php nach config/config.php.');
-}
-
-/**
- * @var mixed $config
- */
-$config = require $configPath;
-
-if (!is_array($config)) {
-    renderFatalError('Die Konfigurationsdatei muss ein Array zurückgeben. Bitte prüfen Sie config/config.php.');
-}
-
-$authConfig = $config['auth'] ?? null;
-
-if ($authConfig !== null && !is_array($authConfig)) {
-    renderFatalError('Der Abschnitt "auth" muss ein Array sein. Bitte korrigieren Sie config/config.php.');
-}
-
-BasicAuth::enforce($authConfig ?? []);
 
 try {
     $storage = new TerminalStorage(__DIR__ . '/../var/terminals.json');
@@ -285,6 +197,74 @@ function sendCheckoutRequest(string $apiKey, string $merchantCode, string $reade
     ];
 }
 
+/**
+ * @return array{status:int, body:array<string, mixed>|null, raw:string, error:string|null}
+ */
+function performSumUpGetRequest(string $apiKey, string $url): array
+{
+    $ch = curl_init($url);
+
+    if ($ch === false) {
+        return [
+            'status' => 0,
+            'body' => null,
+            'raw' => '',
+            'error' => 'cURL konnte nicht initialisiert werden.',
+        ];
+    }
+
+    curl_setopt_array($ch, [
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_HTTPHEADER => [
+            'Authorization: Bearer ' . $apiKey,
+        ],
+        CURLOPT_TIMEOUT => 30,
+    ]);
+
+    $response = curl_exec($ch);
+    $error = curl_error($ch);
+    $status = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    curl_close($ch);
+
+    if ($response === false) {
+        return [
+            'status' => $status,
+            'body' => null,
+            'raw' => '',
+            'error' => $error !== '' ? $error : 'Unbekannter cURL-Fehler.',
+        ];
+    }
+
+    $decoded = json_decode($response, true);
+
+    return [
+        'status' => $status,
+        'body' => is_array($decoded) ? $decoded : null,
+        'raw' => $response,
+        'error' => $error !== '' ? $error : null,
+    ];
+}
+
+/**
+ * @return array{status:int, body:array<string, mixed>|null, raw:string, error:string|null}
+ */
+function fetchTransactionByForeignTransactionId(string $apiKey, string $foreignTransactionId): array
+{
+    $url = 'https://api.sumup.com/v0.1/me/transactions?foreign_transaction_id=' . rawurlencode($foreignTransactionId);
+
+    return performSumUpGetRequest($apiKey, $url);
+}
+
+/**
+ * @return array{status:int, body:array<string, mixed>|null, raw:string, error:string|null}
+ */
+function fetchTransactionByClientTransactionId(string $apiKey, string $clientTransactionId): array
+{
+    $url = 'https://api.sumup.com/v0.1/me/transactions/' . rawurlencode($clientTransactionId);
+
+    return performSumUpGetRequest($apiKey, $url);
+}
+
 $terminalForm = [
     'label' => '',
     'merchant_code' => '',
@@ -310,9 +290,74 @@ $paymentForm = [
 $errors = [];
 $successMessage = null;
 $checkoutResult = null;
+$transactionMeta = null;
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $action = $_POST['action'] ?? '';
+
+    if ($action === 'transaction_status') {
+        $terminalId = (string) ($_POST['terminal_id'] ?? '');
+        $foreignTransactionId = trim((string) ($_POST['foreign_transaction_id'] ?? ''));
+        $clientTransactionId = trim((string) ($_POST['client_transaction_id'] ?? ''));
+        $terminal = $terminalId !== '' ? $storage->find($terminalId) : null;
+
+        header('Content-Type: application/json; charset=UTF-8');
+
+        if ($terminal === null) {
+            echo json_encode([
+                'ok' => false,
+                'error' => 'Terminal nicht gefunden.',
+            ]);
+            exit;
+        }
+
+        if ($foreignTransactionId === '' && $clientTransactionId === '') {
+            echo json_encode([
+                'ok' => false,
+                'error' => 'Es wurde keine Transaktions-ID übermittelt.',
+            ]);
+            exit;
+        }
+
+        if ($clientTransactionId !== '') {
+            $status = fetchTransactionByClientTransactionId($terminal['api_key'], $clientTransactionId);
+        } else {
+            $status = fetchTransactionByForeignTransactionId($terminal['api_key'], $foreignTransactionId);
+        }
+
+        $body = $status['body'];
+        $statusLabel = null;
+
+        if (is_array($body)) {
+            $statusLabel = $body['status'] ?? ($body['transaction_status'] ?? null);
+        }
+
+        $finalStatuses = ['SUCCESSFUL', 'PAID', 'FAILED', 'DECLINED', 'CANCELED', 'CANCELLED', 'REFUNDED'];
+        $isFinal = false;
+
+        if (is_string($statusLabel)) {
+            $upper = strtoupper($statusLabel);
+            $isFinal = in_array($upper, $finalStatuses, true);
+        }
+
+        $httpError = $status['status'] >= 400;
+        $errorMessage = $status['error'];
+
+        if ($httpError && $errorMessage === null) {
+            $errorMessage = sprintf('SumUp hat den Status mit HTTP %d zurückgegeben.', $status['status']);
+        }
+
+        echo json_encode([
+            'ok' => !$httpError && $status['error'] === null,
+            'status_code' => $status['status'],
+            'body' => $body,
+            'raw' => $status['raw'],
+            'error' => $errorMessage,
+            'final' => $isFinal,
+            'display_status' => $statusLabel,
+        ]);
+        exit;
+    }
 
     if ($action === 'add_terminal') {
         $terminalForm = trimInput([
@@ -462,15 +507,41 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
                 if ($checkoutResult['error'] !== null) {
                     $errors[] = 'Die Zahlung konnte nicht gesendet werden: ' . $checkoutResult['error'];
+                } elseif ($checkoutResult['status'] < 200 || $checkoutResult['status'] >= 300) {
+                    $errorDetails = '';
+
+                    if (is_array($checkoutResult['body']) && isset($checkoutResult['body']['message']) && is_string($checkoutResult['body']['message'])) {
+                        $errorDetails = ' (' . $checkoutResult['body']['message'] . ')';
+                    }
+
+                    $errors[] = sprintf(
+                        'Die Zahlung konnte nicht gesendet werden: SumUp antwortete mit HTTP-Status %d%s.',
+                        $checkoutResult['status'],
+                        $errorDetails
+                    );
                 } else {
+                    $clientTransactionId = null;
+
+                    if (is_array($checkoutResult['body'] ?? null) && isset($checkoutResult['body']['client_transaction_id'])) {
+                        $clientTransactionId = (string) $checkoutResult['body']['client_transaction_id'];
+                    }
+
                     $successMessage = sprintf(
-                        'Zahlung an %s gesendet (Betrag: %s %s, Foreign Transaction ID: %s).',
+                        'Zahlung an %s gesendet (Betrag: %s %s, Foreign Transaction ID: %s%s).',
                         $terminal['label'],
                         number_format($amount['value'] / (10 ** $minorUnitValue), $minorUnitValue, ',', '.'),
                         strtoupper($paymentForm['currency']),
-                        $foreignTransactionId
+                        $foreignTransactionId,
+                        $clientTransactionId !== null && $clientTransactionId !== ''
+                            ? ', Client Transaction ID: ' . $clientTransactionId
+                            : ''
                     );
                     $paymentForm['foreign_transaction_id'] = generateForeignTransactionId();
+                    $transactionMeta = [
+                        'terminal_id' => $terminal['id'] ?? $paymentForm['terminal_id'],
+                        'foreign_transaction_id' => $foreignTransactionId,
+                        'client_transaction_id' => $clientTransactionId,
+                    ];
                 }
             }
         }
@@ -534,6 +605,34 @@ foreach ($terminals as $terminal) {
         .container {
             max-width: 1100px;
             margin: 0 auto;
+        }
+
+        nav.top-nav {
+            display: flex;
+            justify-content: center;
+            gap: 1rem;
+            margin: 0 auto 2rem;
+            flex-wrap: wrap;
+            background: rgba(15, 23, 42, 0.85);
+            border: 1px solid rgba(148, 163, 184, 0.25);
+            border-radius: 999px;
+            padding: 0.6rem 1.4rem;
+            backdrop-filter: blur(8px);
+        }
+
+        nav.top-nav a {
+            text-decoration: none;
+            color: #e2e8f0;
+            font-weight: 600;
+            padding: 0.35rem 1rem;
+            border-radius: 999px;
+            transition: background 0.2s ease, color 0.2s ease;
+        }
+
+        nav.top-nav a:hover,
+        nav.top-nav a:focus {
+            background: rgba(56, 189, 248, 0.18);
+            color: #f8fafc;
         }
 
         .grid {
@@ -613,6 +712,57 @@ foreach ($terminals as $terminal) {
             border: 1px solid rgba(74, 222, 128, 0.45);
         }
 
+        code {
+            font-family: ui-monospace, SFMono-Regular, SFMono, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+            font-size: 0.9rem;
+            background: rgba(15, 23, 42, 0.65);
+            padding: 0.1rem 0.4rem;
+            border-radius: 0.35rem;
+        }
+
+        .status-card {
+            margin-top: 2rem;
+        }
+
+        .status-card .status-pill {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.4rem;
+            padding: 0.25rem 0.7rem;
+            border-radius: 999px;
+            background: rgba(56, 189, 248, 0.18);
+            border: 1px solid rgba(56, 189, 248, 0.35);
+            font-weight: 600;
+        }
+
+        .status-card .status-pill.error {
+            background: rgba(248, 113, 113, 0.2);
+            border-color: rgba(248, 113, 113, 0.4);
+        }
+
+        .status-card .status-pill.success {
+            background: rgba(74, 222, 128, 0.25);
+            border-color: rgba(74, 222, 128, 0.4);
+        }
+
+        .status-card pre {
+            margin-top: 1rem;
+            background: rgba(15, 23, 42, 0.8);
+            padding: 1rem;
+            border-radius: 0.75rem;
+            overflow-x: auto;
+        }
+
+        .status-card .status-actions {
+            display: flex;
+            gap: 0.75rem;
+            margin-top: 1rem;
+        }
+
+        .hidden {
+            display: none !important;
+        }
+
         table {
             width: 100%;
             border-collapse: collapse;
@@ -664,8 +814,13 @@ foreach ($terminals as $terminal) {
     </style>
 </head>
 <body>
+<nav class="top-nav">
+    <a href="#home">Home</a>
+    <a href="#checkout">Zahlung an das Terminal schicken</a>
+    <a href="#settings">Einstellungen</a>
+</nav>
 <div class="container">
-    <header style="margin-bottom: 2rem;">
+    <header id="home" style="margin-bottom: 2rem;">
         <h1>SumUp Terminal Checkout</h1>
         <p class="muted">Speichere deine Terminals und schicke Zahlungsanforderungen an die SumUp-API – ganz ohne SSH oder cURL.</p>
     </header>
@@ -687,7 +842,7 @@ foreach ($terminals as $terminal) {
         </div>
     <?php endif; ?>
 
-    <div class="grid grid-two">
+    <div class="grid grid-two" id="settings">
         <section class="card">
             <h2>Neues Terminal speichern</h2>
             <form method="post" autocomplete="off">
@@ -761,7 +916,7 @@ foreach ($terminals as $terminal) {
         </section>
     </div>
 
-    <section class="card" style="margin-top: 2rem;">
+    <section class="card" style="margin-top: 2rem;" id="checkout">
         <h2>Zahlung an Terminal senden</h2>
         <?php if ($terminals === []): ?>
             <p class="muted">Bitte speichere zunächst mindestens ein Terminal, um Zahlungen zu verschicken.</p>
@@ -827,6 +982,30 @@ foreach ($terminals as $terminal) {
             </div>
         <?php endif; ?>
     </section>
+
+    <section class="card status-card" id="transaction-status-card">
+        <h2>Echtzeit-Zahlungsstatus</h2>
+        <?php if ($transactionMeta !== null): ?>
+            <p>
+                Foreign Transaction ID:
+                <code><?= h($transactionMeta['foreign_transaction_id']) ?></code>
+            </p>
+            <?php if (!empty($transactionMeta['client_transaction_id'])): ?>
+                <p>
+                    Client Transaction ID:
+                    <code><?= h((string) $transactionMeta['client_transaction_id']) ?></code>
+                </p>
+            <?php endif; ?>
+            <div class="status-pill" data-transaction-status>Polling läuft…</div>
+            <div class="status-actions">
+                <button type="button" id="refresh-status">Status aktualisieren</button>
+                <button type="button" id="stop-status" class="secondary-button hidden">Automatische Abfrage stoppen</button>
+            </div>
+            <pre id="transaction-status-details" class="hidden"></pre>
+        <?php else: ?>
+            <p class="muted">Sobald eine Zahlung gesendet wurde, erscheint hier der Live-Status.</p>
+        <?php endif; ?>
+    </section>
 </div>
 
 <script>
@@ -842,6 +1021,147 @@ foreach ($terminals as $terminal) {
             if (storedUrl !== '' && returnUrlInput.value === '') {
                 returnUrlInput.value = storedUrl;
             }
+        });
+    }
+
+    const transactionMeta = <?= json_encode($transactionMeta, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE) ?>;
+    const statusCard = document.getElementById('transaction-status-card');
+    const statusPill = statusCard ? statusCard.querySelector('[data-transaction-status]') : null;
+    const statusDetails = document.getElementById('transaction-status-details');
+    const refreshButton = document.getElementById('refresh-status');
+    const stopButton = document.getElementById('stop-status');
+    let pollTimer = null;
+
+    function setStatusClasses(element, state) {
+        if (!element) {
+            return;
+        }
+
+        element.classList.remove('error', 'success');
+
+        if (!state) {
+            return;
+        }
+
+        const normalized = state.toUpperCase();
+
+        if (['FAILED', 'DECLINED', 'CANCELED', 'CANCELLED'].includes(normalized)) {
+            element.classList.add('error');
+        } else if (['SUCCESSFUL', 'PAID', 'COMPLETED'].includes(normalized)) {
+            element.classList.add('success');
+        }
+    }
+
+    function updateStatusView(message, payload, statusLabel) {
+        if (statusPill) {
+            statusPill.textContent = message;
+            setStatusClasses(statusPill, statusLabel);
+        }
+
+        if (statusDetails) {
+            if (payload) {
+                statusDetails.textContent = JSON.stringify(payload, null, 2);
+                statusDetails.classList.remove('hidden');
+            } else {
+                statusDetails.textContent = '';
+                statusDetails.classList.add('hidden');
+            }
+        }
+    }
+
+    function stopPolling() {
+        if (pollTimer) {
+            clearTimeout(pollTimer);
+            pollTimer = null;
+        }
+
+        if (stopButton) {
+            stopButton.classList.add('hidden');
+        }
+    }
+
+    function scheduleNextPoll() {
+        stopPolling();
+
+        pollTimer = window.setTimeout(() => {
+            requestStatus(false);
+        }, 5000);
+
+        if (stopButton) {
+            stopButton.classList.remove('hidden');
+        }
+    }
+
+    function requestStatus(showLoading = true) {
+        if (!transactionMeta || !statusCard) {
+            return;
+        }
+
+        if (showLoading) {
+            updateStatusView('Status wird abgefragt…', null, null);
+        }
+
+        const formData = new FormData();
+        formData.append('action', 'transaction_status');
+        formData.append('terminal_id', transactionMeta.terminal_id || '');
+        formData.append('foreign_transaction_id', transactionMeta.foreign_transaction_id || '');
+
+        if (transactionMeta.client_transaction_id) {
+            formData.append('client_transaction_id', transactionMeta.client_transaction_id);
+        }
+
+        fetch(window.location.href, {
+            method: 'POST',
+            headers: {
+                'X-Requested-With': 'XMLHttpRequest',
+            },
+            body: formData,
+        })
+            .then((response) => response.json())
+            .then((data) => {
+                if (!data.ok) {
+                    updateStatusView(data.error || 'Status konnte nicht geladen werden.', null, null);
+                    stopPolling();
+                    return;
+                }
+
+                const label = data.display_status || null;
+                const httpCode = typeof data.status_code === 'number' ? data.status_code : null;
+                let message = label ? `Aktueller Status: ${label}` : 'Antwort erhalten';
+
+                if (httpCode) {
+                    message += ` (HTTP ${httpCode})`;
+                }
+
+                updateStatusView(message, data.body || null, label);
+
+                if (data.final) {
+                    stopPolling();
+                } else {
+                    scheduleNextPoll();
+                }
+            })
+            .catch(() => {
+                updateStatusView('Status konnte nicht geladen werden (Netzwerkfehler).', null, null);
+                stopPolling();
+            });
+    }
+
+    if (transactionMeta && statusCard) {
+        statusCard.classList.remove('hidden');
+        requestStatus();
+    }
+
+    if (refreshButton) {
+        refreshButton.addEventListener('click', () => {
+            requestStatus();
+        });
+    }
+
+    if (stopButton) {
+        stopButton.addEventListener('click', () => {
+            stopPolling();
+            updateStatusView('Automatische Abfrage gestoppt.', null, null);
         });
     }
 </script>
