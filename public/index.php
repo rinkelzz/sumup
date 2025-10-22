@@ -4,9 +4,33 @@ declare(strict_types=1);
 
 use App\TerminalStorage;
 use App\TransactionStorage;
+use SumUp\BasicAuth;
 
 require_once __DIR__ . '/../src/TerminalStorage.php';
 require_once __DIR__ . '/../src/TransactionStorage.php';
+require_once __DIR__ . '/../src/BasicAuth.php';
+
+$config = [];
+$configPath = __DIR__ . '/../config/config.php';
+
+if (file_exists($configPath)) {
+    /**
+     * @var mixed $loadedConfig
+     */
+    $loadedConfig = require $configPath;
+
+    if (is_array($loadedConfig)) {
+        $config = $loadedConfig;
+    }
+}
+
+$authConfig = [];
+
+if (isset($config['auth']) && is_array($config['auth'])) {
+    $authConfig = $config['auth'];
+}
+
+BasicAuth::enforce($authConfig);
 
 try {
     $storage = new TerminalStorage(__DIR__ . '/../var/terminals.json');
@@ -642,8 +666,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $errors[] = 'Die Zahlungsantwort konnte nicht gespeichert werden: ' . $storageException->getMessage();
                 }
 
-                if ($checkoutResult['error'] !== null) {
-                    $errors[] = 'Die Zahlung konnte nicht gesendet werden: ' . $checkoutResult['error'];
+                if ($transactionRecord['success'] === false) {
+                    if ($checkoutResult['error'] !== null) {
+                        $errors[] = 'Die Zahlung konnte nicht gesendet werden: ' . $checkoutResult['error'];
+                    } else {
+                        $errors[] = sprintf(
+                            'Die Zahlung konnte nicht gesendet werden. Die SumUp API antwortete mit Statuscode %d.',
+                            $checkoutResult['status']
+                        );
+                    }
                 } else {
                     $successMessage = sprintf(
                         'Zahlung an %s gesendet (Betrag: %s %s, Foreign Transaction ID: %s%s).',
