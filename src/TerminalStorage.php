@@ -12,7 +12,10 @@ use Throwable;
  */
 final class TerminalStorage
 {
-    private string $file;
+    /**
+     * @var string
+     */
+    private $file;
 
     public function __construct(string $file)
     {
@@ -77,7 +80,9 @@ final class TerminalStorage
     {
         $filtered = array_values(array_filter(
             $this->all(),
-            static fn(array $terminal): bool => ($terminal['id'] ?? null) !== $id
+            static function (array $terminal) use ($id): bool {
+                return ($terminal['id'] ?? null) !== $id;
+            }
         ));
 
         $this->writeFile(['terminals' => $filtered]);
@@ -123,7 +128,7 @@ final class TerminalStorage
     {
         try {
             return bin2hex(random_bytes(8));
-        } catch (Throwable) {
+        } catch (Throwable $exception) {
             return uniqid('terminal_', true);
         }
     }

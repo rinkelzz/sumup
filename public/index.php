@@ -3,72 +3,9 @@
 declare(strict_types=1);
 
 use App\TerminalStorage;
-use SumUp\BasicAuth;
 
-require_once __DIR__ . '/../src/BasicAuth.php';
 require_once __DIR__ . '/../src/TerminalStorage.php';
 
-function renderFatalError(string $message, int $statusCode = 500): void
-{
-    http_response_code($statusCode);
-    header('Content-Type: text/html; charset=UTF-8');
-
-    $safeMessage = htmlspecialchars($message, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
-
-    echo <<<HTML
-<!DOCTYPE html>
-<html lang="de">
-<head>
-    <meta charset="utf-8">
-    <title>Fehler – SumUp Verwaltung</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <style>
-        :root {
-            color-scheme: light dark;
-            font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
-        }
-
-        body {
-            margin: 0;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            min-height: 100vh;
-            background: #0f172a;
-            color: #f9fafb;
-            padding: 2rem;
-        }
-
-        .card {
-            background: #111827;
-            border-radius: 1rem;
-            padding: 2.5rem 2rem;
-            max-width: 32rem;
-            text-align: center;
-            box-shadow: 0 1.5rem 3rem rgba(15, 23, 42, 0.35);
-        }
-
-        h1 {
-            margin-top: 0;
-            margin-bottom: 1rem;
-            font-size: 1.75rem;
-        }
-
-        p {
-            margin: 0;
-            line-height: 1.6;
-        }
-    </style>
-</head>
-<body>
-    <div class="card">
-        <h1>Es ist ein Fehler aufgetreten</h1>
-        <p>{$safeMessage}</p>
-    </div>
-</body>
-</html>
-HTML;
-
 try {
     $storage = new TerminalStorage(__DIR__ . '/../var/terminals.json');
 } catch (\Throwable $exception) {
@@ -83,39 +20,12 @@ try {
  */
 function trimInput(array $data): array
 {
-    return array_map(static fn(string $value): string => trim($value), $data);
-}
-
-$authConfig = [];
-
-if (isset($config['auth'])) {
-    if (!is_array($config['auth'])) {
-        renderFatalError('Der Abschnitt "auth" muss ein Array sein. Bitte korrigieren Sie config/config.php.');
-    }
-
-    /**
-     * @var array{realm?: string, users?: array<string, string>} $authConfig
-     */
-    $authConfig = $config['auth'];
-}
-
-BasicAuth::enforce($authConfig);
-
-try {
-    $storage = new TerminalStorage(__DIR__ . '/../var/terminals.json');
-} catch (\Throwable $exception) {
-    http_response_code(500);
-    header('Content-Type: text/plain; charset=UTF-8');
-    echo 'Die Terminalverwaltung konnte nicht initialisiert werden: ' . $exception->getMessage();
-    exit;
-}
-
-/**
- * @param array<string, string> $data
- */
-function trimInput(array $data): array
-{
-    return array_map(static fn(string $value): string => trim($value), $data);
+    return array_map(
+        static function (string $value): string {
+            return trim($value);
+        },
+        $data
+    );
 }
 
 function maskCredential(string $credential): string
@@ -133,9 +43,10 @@ function generateForeignTransactionId(): string
 {
     try {
         return 'ft_' . bin2hex(random_bytes(8));
-    } catch (\Throwable) {
+    } catch (\Throwable $exception) {
         return 'ft_' . uniqid();
     }
+}
 
 /**
  * @return array{value:int, formatted:string}
@@ -662,6 +573,35 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
                 if ($checkoutResult['error'] !== null) {
                     $errors[] = 'Die Zahlung konnte nicht gesendet werden: ' . $checkoutResult['error'];
+                } elseif ($checkoutResult['status'] < 200 || $checkoutResult['status'] >= 300) {
+                    $body = $checkoutResult['body'];
+                    $details = null;
+
+                    if (is_array($body)) {
+                        if (isset($body['message']) && is_string($body['message'])) {
+                            $details = $body['message'];
+                        } elseif (isset($body['error_message']) && is_string($body['error_message'])) {
+                            $details = $body['error_message'];
+                        } elseif (isset($body['error_description']) && is_string($body['error_description'])) {
+                            $details = $body['error_description'];
+                        } else {
+                            $encoded = json_encode($body, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+                            if (is_string($encoded) && $encoded !== '') {
+                                $details = $encoded;
+                            }
+                        }
+                    }
+
+                    $errorMessage = sprintf(
+                        'SumUp hat die Zahlung mit HTTP %d beantwortet.',
+                        $checkoutResult['status']
+                    );
+
+                    if ($details !== null && $details !== '') {
+                        $errorMessage .= ' Details: ' . $details;
+                    }
+
+                    $errors[] = $errorMessage;
                 } else {
                     $clientTransactionId = null;
 
@@ -1169,7 +1109,6 @@ foreach ($terminals as $terminal) {
                 </div>
             </form>
         <?php endif; ?>
-    </section>
 
         <?php if ($checkoutResult !== null): ?>
             <div class="response-block">
