@@ -1120,6 +1120,9 @@ foreach ($terminals as $terminal) {
                     <pre><?= h($checkoutResult['raw']) ?></pre>
                 <?php endif; ?>
             </div>
+            <pre id="transaction-status-details" class="hidden"></pre>
+        <?php else: ?>
+            <p class="muted">Sobald eine Zahlung gesendet wurde, erscheint hier der Live-Status.</p>
         <?php endif; ?>
     </section>
 
