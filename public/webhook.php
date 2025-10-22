@@ -7,6 +7,98 @@ use App\TransactionStorage;
 require_once __DIR__ . '/../src/TransactionStorage.php';
 
 /**
+ * @return array<string, mixed>
+ */
+function loadConfiguration(): array
+{
+    $configPath = __DIR__ . '/../config/config.php';
+
+    if (!file_exists($configPath)) {
+        return [];
+    }
+
+    /** @var mixed $config */
+    $config = require $configPath;
+
+    if (!is_array($config)) {
+        return [];
+    }
+
+    return $config;
+}
+
+/**
+ * @param array<string, string> $headers
+ * @param list<string>          $names
+ */
+function findHeader(array $headers, array $names): ?string
+{
+    foreach ($names as $name) {
+        if (isset($headers[$name]) && $headers[$name] !== '') {
+            return (string) $headers[$name];
+        }
+    }
+
+    return null;
+}
+
+/**
+ * @param array<string, string> $headers
+ */
+function authenticateRequest(string $rawBody, array $headers): void
+{
+    $config = loadConfiguration();
+    $webhookConfig = [];
+
+    if (isset($config['webhook']) && is_array($config['webhook'])) {
+        /** @var array<string, mixed> $webhookConfig */
+        $webhookConfig = $config['webhook'];
+    }
+
+    $sharedSecret = '';
+
+    if (isset($webhookConfig['shared_secret']) && is_string($webhookConfig['shared_secret'])) {
+        $sharedSecret = trim($webhookConfig['shared_secret']);
+    }
+
+    if ($sharedSecret === '') {
+        http_response_code(500);
+        header('Content-Type: text/plain; charset=UTF-8');
+        echo 'Webhook shared secret is not configured.';
+        exit;
+    }
+
+    $signature = findHeader($headers, [
+        'X-Sumup-Signature',
+        'X-SumUp-Signature',
+        'X-Signature',
+        'X-Hub-Signature-256',
+    ]);
+
+    if ($signature === null) {
+        http_response_code(401);
+        header('Content-Type: text/plain; charset=UTF-8');
+        echo 'Webhook signature header missing.';
+        exit;
+    }
+
+    $normalizedSignature = trim($signature);
+
+    if (strpos($normalizedSignature, '=') !== false) {
+        [$_algo, $normalizedSignature] = explode('=', $normalizedSignature, 2);
+    }
+
+    $expectedSignature = hash_hmac('sha256', $rawBody, $sharedSecret);
+
+    if ($expectedSignature === false || !hash_equals($expectedSignature, $normalizedSignature)) {
+        http_response_code(401);
+        header('Content-Type: text/plain; charset=UTF-8');
+        echo 'Webhook signature verification failed.';
+        exit;
+    }
+}
+
+/**
  * @return array<string, string>
  */
 function requestHeaders(): array
@@ -63,6 +155,8 @@ if (isset($headers['Content-Type'])) {
 } elseif (isset($_SERVER['CONTENT_TYPE'])) {
     $contentType = (string) $_SERVER['CONTENT_TYPE'];
 }
+
+authenticateRequest($rawBody, $headers);
 
 $parsedPayload = null;
 $parseError = null;
