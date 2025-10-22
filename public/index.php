@@ -3,8 +3,93 @@
 declare(strict_types=1);
 
 use App\TerminalStorage;
+use SumUp\BasicAuth;
 
 require_once __DIR__ . '/../src/TerminalStorage.php';
+require_once __DIR__ . '/../src/BasicAuth.php';
+
+try {
+    $storage = new TerminalStorage(__DIR__ . '/../var/terminals.json');
+} catch (\Throwable $exception) {
+    http_response_code(500);
+    header('Content-Type: text/plain; charset=UTF-8');
+    echo 'Die Terminalverwaltung konnte nicht initialisiert werden: ' . $exception->getMessage();
+    exit;
+}
+
+/**
+ * @param array<string, string> $data
+ */
+function trimInput(array $data): array
+{
+    return array_map(
+        static function (string $value): string {
+            return trim($value);
+        },
+        $data
+    );
+}
+
+function maskCredential(string $credential): string
+{
+    $length = strlen($credential);
+
+    if ($length <= 8) {
+        return str_repeat('•', $length);
+    }
+
+    return substr($credential, 0, 6) . '…' . substr($credential, -4);
+}
+
+        .card {
+            background: #111827;
+            border-radius: 1rem;
+            padding: 2.5rem 2rem;
+            max-width: 32rem;
+            text-align: center;
+            box-shadow: 0 1.5rem 3rem rgba(15, 23, 42, 0.35);
+        }
+
+/**
+ * @return array{value:int, formatted:string}
+ */
+function convertAmountToMinorUnits(string $amount, int $minorUnit): array
+{
+    if ($minorUnit < 0 || $minorUnit > 6) {
+        throw new InvalidArgumentException('Die Anzahl der Nachkommastellen muss zwischen 0 und 6 liegen.');
+    }
+
+    $normalized = str_replace(',', '.', $amount);
+
+    if ($normalized === '' || !preg_match('/^\d+(?:\.\d+)?$/', $normalized)) {
+        throw new InvalidArgumentException('Der Betrag muss eine positive Zahl sein.');
+    }
+
+    [$whole, $fraction] = array_pad(explode('.', $normalized, 2), 2, '');
+
+    if ($minorUnit === 0 && $fraction !== '') {
+        throw new InvalidArgumentException('Für Beträge ohne Nachkommastellen darf keine Dezimalstelle angegeben werden.');
+    }
+
+    if (strlen($fraction) > $minorUnit) {
+        throw new InvalidArgumentException(sprintf('Maximal %d Nachkommastellen erlaubt.', $minorUnit));
+    }
+
+    $fraction = substr($fraction . str_repeat('0', $minorUnit), 0, $minorUnit);
+
+$authConfig = [];
+
+if (isset($config['auth'])) {
+    if (!is_array($config['auth'])) {
+        renderFatalError('Der Abschnitt "auth" muss ein Array sein. Bitte korrigieren Sie config/config.php.');
+    }
+
+    /** @var array{realm?: string, users?: array<string, string>} $authSection */
+    $authSection = $config['auth'];
+    $authConfig = $authSection;
+}
+
+BasicAuth::enforce($authConfig);
 
 try {
     $storage = new TerminalStorage(__DIR__ . '/../var/terminals.json');
@@ -46,7 +131,6 @@ function generateForeignTransactionId(): string
     } catch (\Throwable $exception) {
         return 'ft_' . uniqid();
     }
-}
 
 /**
  * @return array{value:int, formatted:string}
@@ -571,37 +655,32 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $payload
                 );
 
-                if ($checkoutResult['error'] !== null) {
-                    $errors[] = 'Die Zahlung konnte nicht gesendet werden: ' . $checkoutResult['error'];
-                } elseif ($checkoutResult['status'] < 200 || $checkoutResult['status'] >= 300) {
-                    $body = $checkoutResult['body'];
-                    $details = null;
+                $httpError = $checkoutResult['status'] < 200 || $checkoutResult['status'] >= 300;
 
-                    if (is_array($body)) {
-                        if (isset($body['message']) && is_string($body['message'])) {
-                            $details = $body['message'];
-                        } elseif (isset($body['error_message']) && is_string($body['error_message'])) {
-                            $details = $body['error_message'];
-                        } elseif (isset($body['error_description']) && is_string($body['error_description'])) {
-                            $details = $body['error_description'];
-                        } else {
-                            $encoded = json_encode($body, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
-                            if (is_string($encoded) && $encoded !== '') {
-                                $details = $encoded;
+                if ($checkoutResult['error'] !== null || $httpError) {
+                    $details = [];
+
+                    if ($checkoutResult['error'] !== null) {
+                        $details[] = $checkoutResult['error'];
+                    }
+
+                    if ($httpError) {
+                        $httpMessage = sprintf('SumUp hat die Zahlung mit HTTP %d beantwortet.', $checkoutResult['status']);
+
+                        if (is_array($checkoutResult['body'])) {
+                            $bodyMessage = $checkoutResult['body']['message']
+                                ?? $checkoutResult['body']['error_message']
+                                ?? null;
+
+                            if (is_string($bodyMessage) && $bodyMessage !== '') {
+                                $httpMessage .= ' ' . $bodyMessage;
                             }
                         }
+
+                        $details[] = $httpMessage;
                     }
 
-                    $errorMessage = sprintf(
-                        'SumUp hat die Zahlung mit HTTP %d beantwortet.',
-                        $checkoutResult['status']
-                    );
-
-                    if ($details !== null && $details !== '') {
-                        $errorMessage .= ' Details: ' . $details;
-                    }
-
-                    $errors[] = $errorMessage;
+                    $errors[] = 'Die Zahlung konnte nicht gesendet werden: ' . implode(' ', $details);
                 } else {
                     $clientTransactionId = null;
 
@@ -899,7 +978,7 @@ foreach ($terminals as $terminal) {
 <body>
 <nav class="top-nav">
     <a href="#home">Home</a>
-    <a href="#checkout">Zahlung an das Terminal schicken</a>
+    <a href="#terminals">Terminals</a>
     <a href="#settings">Einstellungen</a>
 </nav>
 <div class="container">
@@ -925,139 +1004,7 @@ foreach ($terminals as $terminal) {
         </div>
     <?php endif; ?>
 
-    <div class="grid grid-two" id="settings">
-        <section class="card">
-            <h2>Neues Terminal speichern</h2>
-            <form method="post" autocomplete="off">
-                <input type="hidden" name="action" value="add_terminal">
-
-                <label for="label">Bezeichnung</label>
-                <input id="label" name="label" required value="<?= h($terminalForm['label']) ?>">
-
-                <label for="merchant_code">Merchant Code (z. B. MCRNF79M)</label>
-                <input id="merchant_code" name="merchant_code" required value="<?= h($terminalForm['merchant_code']) ?>">
-
-                <label for="reader_id">Reader ID</label>
-                <input id="reader_id" name="reader_id" required value="<?= h($terminalForm['reader_id']) ?>">
-
-                <label for="app_id">Affiliate App ID</label>
-                <input id="app_id" name="app_id" required value="<?= h($terminalForm['app_id']) ?>">
-
-                <label for="affiliate_key">Affiliate Key</label>
-                <input id="affiliate_key" name="affiliate_key" required value="<?= h($terminalForm['affiliate_key']) ?>">
-
-                <label for="api_key">SumUp Secret Key (Bearer Token)</label>
-                <input id="api_key" name="api_key" required value="<?= h($terminalForm['api_key']) ?>">
-
-                <label for="default_return_url">Standard-Return-URL (optional)</label>
-                <input id="default_return_url" name="default_return_url" value="<?= h($terminalForm['default_return_url']) ?>" placeholder="https://example.com/webhook.php">
-                <p class="muted">Tipp: Hinterlege in SumUp <code><?= h((string) ($_SERVER['HTTP_HOST'] ?? 'example.com')) ?>/webhook.php</code> als Return-URL für Webhooks.</p>
-
-                <div class="actions" style="margin-top: 1.5rem;">
-                    <button type="submit">Terminal speichern</button>
-                </div>
-            </form>
-        </section>
-
-        <section class="card">
-            <h2>Gespeicherte Terminals</h2>
-            <?php if ($terminals === []): ?>
-                <p class="muted">Noch keine Terminals hinterlegt. Lege zuerst rechts ein neues Gerät an.</p>
-            <?php else: ?>
-                <div style="overflow-x: auto;">
-                    <table>
-                        <thead>
-                        <tr>
-                            <th>Bezeichnung</th>
-                            <th>Merchant</th>
-                            <th>Reader</th>
-                            <th>Affiliate App</th>
-                            <th>API Key</th>
-                            <th></th>
-                        </tr>
-                        </thead>
-                        <tbody>
-                        <?php foreach ($terminals as $terminal): ?>
-                            <tr>
-                                <td><?= h($terminal['label']) ?></td>
-                                <td><?= h($terminal['merchant_code']) ?></td>
-                                <td><?= h($terminal['reader_id']) ?></td>
-                                <td><?= h($terminal['app_id']) ?></td>
-                                <td><?= h(maskCredential($terminal['api_key'])) ?></td>
-                                <td>
-                                    <form class="inline-form" method="post" onsubmit="return confirm('Terminal wirklich löschen?');">
-                                        <input type="hidden" name="action" value="delete_terminal">
-                                        <input type="hidden" name="terminal_id" value="<?= h($terminal['id']) ?>">
-                                        <button type="submit" class="secondary-button">Entfernen</button>
-                                    </form>
-                                </td>
-                            </tr>
-                        <?php endforeach; ?>
-                        </tbody>
-                    </table>
-                </div>
-            <?php endif; ?>
-        </section>
-    </div>
-
-    <section class="card" style="margin-top: 2rem;">
-        <h2>Terminals vom SumUp-Konto abrufen</h2>
-        <form method="post" autocomplete="off" style="margin-bottom: 1.5rem;">
-            <input type="hidden" name="action" value="fetch_readers">
-
-            <label for="lookup-merchant-code">Merchant Code</label>
-            <input id="lookup-merchant-code" name="merchant_code" required value="<?= h($readerLookupForm['merchant_code']) ?>">
-
-            <label for="lookup-api-key">SumUp Secret Key (Bearer Token)</label>
-            <input id="lookup-api-key" name="api_key" required value="<?= h($readerLookupForm['api_key']) ?>">
-
-            <div class="actions" style="margin-top: 1.5rem;">
-                <button type="submit">Reader abrufen</button>
-            </div>
-        </form>
-
-        <?php if (is_array($fetchedReaders)): ?>
-            <?php if ($fetchedReaders === []): ?>
-                <p class="muted">Für diesen Merchant wurden keine Terminals zurückgegeben.</p>
-            <?php else: ?>
-                <div style="overflow-x: auto;">
-                    <table>
-                        <thead>
-                        <tr>
-                            <th>Reader ID</th>
-                            <th>Bezeichnung</th>
-                            <th>Status</th>
-                            <th>Modell</th>
-                            <th>Seriennummer</th>
-                        </tr>
-                        </thead>
-                        <tbody>
-                        <?php foreach ($fetchedReaders as $reader): ?>
-                            <tr>
-                                <td><?= h((string) ($reader['id'] ?? ($reader['reader_id'] ?? ''))) ?></td>
-                                <td><?= h((string) ($reader['label'] ?? ($reader['description'] ?? ''))) ?></td>
-                                <td><?= h((string) ($reader['status'] ?? '')) ?></td>
-                                <td><?= h((string) ($reader['type'] ?? ($reader['model'] ?? ''))) ?></td>
-                                <td><?= h((string) ($reader['serial_number'] ?? ($reader['serial'] ?? ''))) ?></td>
-                            </tr>
-                        <?php endforeach; ?>
-                        </tbody>
-                    </table>
-                </div>
-            <?php endif; ?>
-
-            <?php if ($fetchedReadersRaw !== null): ?>
-                <details style="margin-top: 1rem;">
-                    <summary>Rohdaten anzeigen</summary>
-                    <pre style="white-space: pre-wrap; word-break: break-word; background: #0f172a; color: #e2e8f0; padding: 1rem; border-radius: 0.5rem;"><?= h($fetchedReadersRaw) ?></pre>
-                </details>
-            <?php endif; ?>
-        <?php else: ?>
-            <p class="muted">Gib deinen Merchant Code und den API Key ein, um die verbundenen Terminals anzeigen zu lassen.</p>
-        <?php endif; ?>
-    </section>
-
-    <section class="card" style="margin-top: 2rem;" id="checkout">
+    <section class="card" id="checkout">
         <h2>Zahlung an Terminal senden</h2>
         <?php if ($terminals === []): ?>
             <p class="muted">Bitte speichere zunächst mindestens ein Terminal, um Zahlungen zu verschicken.</p>
@@ -1100,7 +1047,7 @@ foreach ($terminals as $terminal) {
 
                 <label for="tip_rates" style="margin-top: 1rem;">Trinkgeldsätze (optional)</label>
                 <input id="tip_rates" name="tip_rates" value="<?= h($paymentForm['tip_rates']) ?>" placeholder="Beispiel: 5,10,15">
-                <p class="muted" style="margin-top: 0.25rem;">Mehrere Sätze kommasepariert eingeben. Werte &gt; 1 werden als Prozent interpretiert.</p>
+                <p class="muted" style="margin-top: 0.25rem;">Mehrere Sätze kommasepariert eingeben. Werte > 1 werden als Prozent interpretiert.</p>
 
                 <label for="tip_timeout" style="margin-top: 1rem;">Trinkgeld-Timeout in Sekunden (optional)</label>
                 <input id="tip_timeout" name="tip_timeout" value="<?= h($paymentForm['tip_timeout']) ?>" placeholder="60">
@@ -1121,36 +1068,169 @@ foreach ($terminals as $terminal) {
                     <pre><?= h($checkoutResult['raw']) ?></pre>
                 <?php endif; ?>
             </div>
-            <pre id="transaction-status-details" class="hidden"></pre>
-        <?php else: ?>
-            <p class="muted">Sobald eine Zahlung gesendet wurde, erscheint hier der Live-Status.</p>
         <?php endif; ?>
     </section>
 
-    <section class="card status-card" id="transaction-status-card">
-        <h2>Echtzeit-Zahlungsstatus</h2>
-        <?php if ($transactionMeta !== null): ?>
-            <p>
-                Foreign Transaction ID:
-                <code><?= h($transactionMeta['foreign_transaction_id']) ?></code>
-            </p>
-            <?php if (!empty($transactionMeta['client_transaction_id'])): ?>
-                <p>
-                    Client Transaction ID:
-                    <code><?= h((string) $transactionMeta['client_transaction_id']) ?></code>
-                </p>
-            <?php endif; ?>
-            <div class="status-pill" data-transaction-status>Polling läuft…</div>
-            <div class="status-actions">
-                <button type="button" id="refresh-status">Status aktualisieren</button>
-                <button type="button" id="stop-status" class="secondary-button hidden">Automatische Abfrage stoppen</button>
-            </div>
-            <pre id="transaction-status-details" class="hidden"></pre>
+    <section class="card" id="terminals">
+        <h2>Gespeicherte Terminals</h2>
+        <?php if ($terminals === []): ?>
+            <p class="muted">Noch keine Terminals hinterlegt. Lege unter „Einstellungen“ ein neues Gerät an.</p>
         <?php else: ?>
-            <p class="muted">Sobald eine Zahlung gesendet wurde, erscheint hier der Live-Status.</p>
+            <div style="overflow-x: auto;">
+                <table>
+                    <thead>
+                    <tr>
+                        <th>Bezeichnung</th>
+                        <th>Reader ID</th>
+                        <th>Merchant Code</th>
+                        <th>Return-URL</th>
+                        <th>Aktionen</th>
+                    </tr>
+                    </thead>
+                    <tbody>
+                    <?php foreach ($terminals as $terminal): ?>
+                        <tr>
+                            <td><?= h($terminal['label']) ?></td>
+                            <td><code><?= h($terminal['reader_id']) ?></code></td>
+                            <td><code><?= h($terminal['merchant_code']) ?></code></td>
+                            <td>
+                                <?php if ($terminal['default_return_url'] !== ''): ?>
+                                    <a href="<?= h($terminal['default_return_url']) ?>" target="_blank" rel="noopener noreferrer">Link öffnen</a>
+                                <?php else: ?>
+                                    <span class="muted">Nicht gesetzt</span>
+                                <?php endif; ?>
+                            </td>
+                            <td>
+                                <form class="inline-form" method="post" onsubmit="return confirm('Terminal wirklich löschen?');">
+                                    <input type="hidden" name="action" value="delete_terminal">
+                                    <input type="hidden" name="terminal_id" value="<?= h($terminal['id']) ?>">
+                                    <button type="submit" class="secondary-button">Entfernen</button>
+                                </form>
+                            </td>
+                        </tr>
+                    <?php endforeach; ?>
+                    </tbody>
+                </table>
+            </div>
         <?php endif; ?>
     </section>
-</div>
+
+    <section id="settings" style="margin-top: 2rem;">
+        <div class="grid grid-two">
+            <section class="card">
+                <h2>Neues Terminal speichern</h2>
+                <form method="post" autocomplete="off">
+                    <input type="hidden" name="action" value="add_terminal">
+
+                    <label for="label">Bezeichnung</label>
+                    <input id="label" name="label" required value="<?= h($terminalForm['label']) ?>">
+
+                    <label for="merchant_code">Merchant Code (z. B. MCRNF79M)</label>
+                    <input id="merchant_code" name="merchant_code" required value="<?= h($terminalForm['merchant_code']) ?>">
+
+                    <label for="reader_id">Reader ID</label>
+                    <input id="reader_id" name="reader_id" required value="<?= h($terminalForm['reader_id']) ?>">
+
+                    <label for="app_id">Affiliate App ID</label>
+                    <input id="app_id" name="app_id" required value="<?= h($terminalForm['app_id']) ?>">
+
+                    <label for="affiliate_key">Affiliate Key</label>
+                    <input id="affiliate_key" name="affiliate_key" required value="<?= h($terminalForm['affiliate_key']) ?>">
+
+                    <label for="api_key">SumUp Secret Key (Bearer Token)</label>
+                    <input id="api_key" name="api_key" required value="<?= h($terminalForm['api_key']) ?>">
+
+                    <label for="default_return_url">Standard-Return-URL (optional)</label>
+                    <input id="default_return_url" name="default_return_url" value="<?= h($terminalForm['default_return_url']) ?>" placeholder="https://example.com/webhook">
+
+                    <div class="actions" style="margin-top: 1.5rem;">
+                        <button type="submit">Terminal speichern</button>
+                    </div>
+                </form>
+            </section>
+
+            <section class="card">
+                <h2>Terminals vom SumUp-Konto abrufen</h2>
+                <form method="post" autocomplete="off" style="margin-bottom: 1.5rem;">
+                    <input type="hidden" name="action" value="fetch_readers">
+
+                    <label for="lookup-merchant-code">Merchant Code</label>
+                    <input id="lookup-merchant-code" name="merchant_code" required value="<?= h($readerLookupForm['merchant_code']) ?>">
+
+                    <label for="lookup-api-key">SumUp Secret Key (Bearer Token)</label>
+                    <input id="lookup-api-key" name="api_key" required value="<?= h($readerLookupForm['api_key']) ?>">
+
+                    <div class="actions" style="margin-top: 1.5rem;">
+                        <button type="submit">Reader abrufen</button>
+                    </div>
+                </form>
+
+                <?php if (is_array($fetchedReaders)): ?>
+                    <?php if ($fetchedReaders === []): ?>
+                        <p class="muted">Für diesen Merchant wurden keine Terminals zurückgegeben.</p>
+                    <?php else: ?>
+                        <div style="overflow-x: auto;">
+                            <table>
+                                <thead>
+                                <tr>
+                                    <th>Reader ID</th>
+                                    <th>Bezeichnung</th>
+                                    <th>Status</th>
+                                    <th>Modell</th>
+                                    <th>Seriennummer</th>
+                                </tr>
+                                </thead>
+                                <tbody>
+                                <?php foreach ($fetchedReaders as $reader): ?>
+                                    <tr>
+                                        <td><?= h((string) ($reader['id'] ?? ($reader['reader_id'] ?? ''))) ?></td>
+                                        <td><?= h((string) ($reader['label'] ?? ($reader['description'] ?? ''))) ?></td>
+                                        <td><?= h((string) ($reader['status'] ?? '')) ?></td>
+                                        <td><?= h((string) ($reader['type'] ?? ($reader['model'] ?? ''))) ?></td>
+                                        <td><?= h((string) ($reader['serial_number'] ?? ($reader['serial'] ?? ''))) ?></td>
+                                    </tr>
+                                <?php endforeach; ?>
+                                </tbody>
+                            </table>
+                        </div>
+                    <?php endif; ?>
+
+                    <?php if ($fetchedReadersRaw !== null): ?>
+                        <details style="margin-top: 1rem;">
+                            <summary>Rohdaten anzeigen</summary>
+                            <pre style="white-space: pre-wrap; word-break: break-word; background: #0f172a; color: #e2e8f0; padding: 1rem; border-radius: 0.5rem;"><?= h($fetchedReadersRaw) ?></pre>
+                        </details>
+                    <?php endif; ?>
+                <?php else: ?>
+                    <p class="muted">Gib deinen Merchant Code und den API Key ein, um die verbundenen Terminals anzeigen zu lassen.</p>
+                <?php endif; ?>
+            </section>
+        </div>
+
+        <section class="card status-card" id="transaction-status-card">
+            <h2>Echtzeit-Zahlungsstatus</h2>
+            <?php if ($transactionMeta !== null): ?>
+                <p>
+                    Foreign Transaction ID:
+                    <code><?= h($transactionMeta['foreign_transaction_id']) ?></code>
+                </p>
+                <?php if (!empty($transactionMeta['client_transaction_id'])): ?>
+                    <p>
+                        Client Transaction ID:
+                        <code><?= h((string) $transactionMeta['client_transaction_id']) ?></code>
+                    </p>
+                <?php endif; ?>
+                <div class="status-pill" data-transaction-status>Polling läuft…</div>
+                <div class="status-actions">
+                    <button type="button" id="refresh-status">Status aktualisieren</button>
+                    <button type="button" id="stop-status" class="secondary-button hidden">Automatische Abfrage stoppen</button>
+                </div>
+                <pre id="transaction-status-details" class="hidden"></pre>
+            <?php else: ?>
+                <p class="muted">Sobald eine Zahlung gesendet wurde, erscheint hier der Live-Status.</p>
+            <?php endif; ?>
+        </section>
+    </section>
 
 <script>
     const terminalReturnUrls = <?= json_encode($terminalReturnUrls, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE) ?>;
