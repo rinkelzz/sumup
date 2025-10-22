@@ -4,96 +4,92 @@ declare(strict_types=1);
 
 namespace App;
 
-use DateTimeImmutable;
-use DateTimeInterface;
 use RuntimeException;
+use Throwable;
 
 /**
- * Stores incoming SumUp webhook payloads as JSON files.
+ * Persisted storage for SumUp checkout responses.
  */
 final class TransactionStorage
 {
     /**
      * @var string
      */
-    private $directory;
+    private $file;
 
-    public function __construct(string $directory)
+    public function __construct(string $file)
     {
-        $this->directory = rtrim($directory, '/');
+        $this->file = $file;
+        $directory = dirname($file);
 
-        if (!is_dir($this->directory)) {
-            if (!mkdir($this->directory, 0775, true) && !is_dir($this->directory)) {
-                throw new RuntimeException(sprintf('Das Verzeichnis %s konnte nicht erstellt werden.', $this->directory));
+        if (!is_dir($directory)) {
+            if (!mkdir($directory, 0775, true) && !is_dir($directory)) {
+                throw new RuntimeException(sprintf('Das Verzeichnis %s konnte nicht erstellt werden.', $directory));
+            }
+        }
+
+        if (!file_exists($file)) {
+            $initialContent = json_encode(['transactions' => []], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
+
+            if ($initialContent === false || file_put_contents($file, $initialContent) === false) {
+                throw new RuntimeException(sprintf('Die Datei %s konnte nicht angelegt werden.', $file));
             }
         }
     }
 
     /**
-     * @param array<string, mixed> $payload
+     * @return array<int, array<string, mixed>>
      */
-    public function append(string $transactionId, array $payload): void
+    public function all(): array
     {
-        $file = $this->buildFilePath($transactionId);
-        $data = $this->readFile($file, $transactionId);
+        $data = $this->readFile();
+        $transactions = $data['transactions'] ?? [];
 
-        if (!isset($data['events']) || !is_array($data['events'])) {
-            $data['events'] = [];
-        }
-
-        $data['events'][] = $payload;
-        $data['last_updated'] = (new DateTimeImmutable())->format(DateTimeInterface::ATOM);
-
-        $this->writeFile($file, $data);
+        return is_array($transactions) ? $transactions : [];
     }
 
-    private function buildFilePath(string $transactionId): string
+    /**
+     * @param array<string, mixed> $transaction
+     * @return array<string, mixed>
+     */
+    public function add(array $transaction): array
     {
-        $sanitized = preg_replace('/[^A-Za-z0-9_\-]/', '_', $transactionId);
+        $transactions = $this->all();
 
-        if ($sanitized === null || $sanitized === '') {
-            throw new RuntimeException('Die Transaktions-ID ist ungültig.');
+        if (!isset($transaction['id'])) {
+            $transaction['id'] = $this->generateId();
         }
 
-        return $this->directory . '/' . $sanitized . '.json';
+        $transactions[] = $transaction;
+        $this->writeFile(['transactions' => $transactions]);
+
+        return $transaction;
     }
 
     /**
      * @return array<string, mixed>
      */
-    private function readFile(string $file, string $transactionId): array
+    private function readFile(): array
     {
-        if (!file_exists($file)) {
-            return [
-                'id' => $transactionId,
-                'events' => [],
-                'created_at' => (new DateTimeImmutable())->format(DateTimeInterface::ATOM),
-            ];
-        }
-
-        $contents = file_get_contents($file);
+        $contents = file_get_contents($this->file);
 
         if ($contents === false || $contents === '') {
-            return [
-                'id' => $transactionId,
-                'events' => [],
-                'created_at' => (new DateTimeImmutable())->format(DateTimeInterface::ATOM),
-            ];
+            return ['transactions' => []];
         }
 
         $decoded = json_decode($contents, true);
 
-        if (!is_array($decoded)) {
-            throw new RuntimeException(sprintf('Die Transaktionsdatei %s enthält ungültige JSON-Daten.', $file));
+        if (is_array($decoded)) {
+            return $decoded;
         }
 
-        return $decoded;
+        throw new RuntimeException('Die Transaktionsdatei enthält ungültige JSON-Daten.');
     }
 
     /**
      * @param array<string, mixed> $data
      */
-    private function writeFile(string $file, array $data): void
+    private function writeFile(array $data): void
     {
         $json = json_encode($data, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
 
@@ -101,8 +97,17 @@ final class TransactionStorage
             throw new RuntimeException('Die Transaktionsdaten konnten nicht serialisiert werden.');
         }
 
-        if (file_put_contents($file, $json) === false) {
-            throw new RuntimeException(sprintf('Die Transaktionsdaten konnten nicht nach %s geschrieben werden.', $file));
+        if (file_put_contents($this->file, $json) === false) {
+            throw new RuntimeException(sprintf('Die Transaktionsdaten konnten nicht nach %s geschrieben werden.', $this->file));
+        }
+    }
+
+    private function generateId(): string
+    {
+        try {
+            return bin2hex(random_bytes(8));
+        } catch (Throwable $exception) {
+            return uniqid('transaction_', true);
         }
     }
 }
