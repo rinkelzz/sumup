@@ -30,6 +30,7 @@ if (isset($config['auth']) && is_array($config['auth'])) {
     $authConfig = $config['auth'];
 }
 
+// Protect privileged dashboard operations with HTTP Basic authentication.
 BasicAuth::enforce($authConfig);
 
 try {
@@ -644,15 +645,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $requestSnapshot['tip_timeout'] = $payload['tip_timeout'];
                 }
 
+                $statusCode = isset($checkoutResult['status'])
+                    ? (int) $checkoutResult['status']
+                    : 0;
+                $transportError = $checkoutResult['error'];
+                $isSuccessfulResponse = $transportError === null && $statusCode >= 200 && $statusCode < 400;
+
                 $transactionRecord = [
                     'terminal_id' => $terminal['id'] ?? $paymentForm['terminal_id'],
                     'terminal_label' => $terminal['label'],
                     'foreign_transaction_id' => $foreignTransactionId,
                     'client_transaction_id' => $clientTransactionId,
-                    'status_code' => $checkoutResult['status'],
+                    'status_code' => $statusCode,
                     'status_label' => $statusLabel,
-                    'success' => $checkoutResult['error'] === null && $checkoutResult['status'] < 400,
-                    'error_message' => $checkoutResult['error'],
+                    'success' => $isSuccessfulResponse,
+                    'error_message' => $transportError,
                     'response_body' => $checkoutResult['body'],
                     'response_raw' => $checkoutResult['raw'],
                     'request' => $requestSnapshot,
@@ -667,12 +674,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 }
 
                 if ($transactionRecord['success'] === false) {
-                    if ($checkoutResult['error'] !== null) {
-                        $errors[] = 'Die Zahlung konnte nicht gesendet werden: ' . $checkoutResult['error'];
+                    if ($transportError !== null) {
+                        $errors[] = 'Die Zahlung konnte nicht gesendet werden: ' . $transportError;
                     } else {
                         $errors[] = sprintf(
                             'Die Zahlung konnte nicht gesendet werden. Die SumUp API antwortete mit Statuscode %d.',
-                            $checkoutResult['status']
+                            $statusCode
                         );
                     }
                 } else {
@@ -696,6 +703,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
         }
     }
+}
 
 $terminals = $storage->all();
 
