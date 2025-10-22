@@ -19,21 +19,72 @@ final class TerminalStorage
 
     public function __construct(string $file)
     {
-        $this->file = $file;
+        $initialContent = json_encode(['terminals' => []], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
+
+        if ($initialContent === false) {
+            throw new RuntimeException('Die Terminaldaten konnten nicht initialisiert werden.');
+        }
+
+        $resolved = $this->prepareStorageFile($file, $initialContent, 'terminals.json');
+
+        if ($resolved === null) {
+            throw new RuntimeException('Die Terminaldaten konnten nicht persistiert werden. Bitte Schreibrechte für das Verzeichnis "var" vergeben oder ein beschreibbares Temp-Verzeichnis bereitstellen.');
+        }
+
+        $this->file = $resolved;
+    }
+
+    /**
+     * @return string|null
+     */
+    private function prepareStorageFile(string $preferredFile, string $initialContent, string $fallbackBasename)
+    {
+        if ($this->initialiseFile($preferredFile, $initialContent)) {
+            return $preferredFile;
+        }
+
+        $tempDirectory = rtrim(sys_get_temp_dir(), DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . 'sumup-storage';
+        $fallbackFile = $tempDirectory . DIRECTORY_SEPARATOR . $fallbackBasename;
+
+        if ($this->initialiseFile($fallbackFile, $initialContent)) {
+            return $fallbackFile;
+        }
+
+        return null;
+    }
+
+    private function initialiseFile(string $file, string $initialContent): bool
+    {
         $directory = dirname($file);
 
-        if (!is_dir($directory)) {
-            if (!mkdir($directory, 0775, true) && !is_dir($directory)) {
-                throw new RuntimeException(sprintf('Das Verzeichnis %s konnte nicht erstellt werden.', $directory));
-            }
+        if (!$this->ensureDirectory($directory)) {
+            return false;
         }
 
         if (!file_exists($file)) {
-            $initialContent = json_encode(['terminals' => []], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
-            if ($initialContent === false || file_put_contents($file, $initialContent) === false) {
-                throw new RuntimeException(sprintf('Die Datei %s konnte nicht angelegt werden.', $file));
+            if (@file_put_contents($file, $initialContent, LOCK_EX) === false) {
+                return false;
             }
         }
+
+        if (!is_writable($file) && !@chmod($file, 0664)) {
+            return false;
+        }
+
+        return is_writable($file);
+    }
+
+    private function ensureDirectory(string $directory): bool
+    {
+        if (is_dir($directory)) {
+            if (is_writable($directory)) {
+                return true;
+            }
+
+            return @chmod($directory, 0775) && is_writable($directory);
+        }
+
+        return @mkdir($directory, 0775, true) || is_dir($directory);
     }
 
     /**

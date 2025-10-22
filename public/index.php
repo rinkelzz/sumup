@@ -4,33 +4,9 @@ declare(strict_types=1);
 
 use App\TerminalStorage;
 use App\TransactionStorage;
-use SumUp\BasicAuth;
 
 require_once __DIR__ . '/../src/TerminalStorage.php';
 require_once __DIR__ . '/../src/TransactionStorage.php';
-require_once __DIR__ . '/../src/BasicAuth.php';
-
-$config = [];
-$configPath = __DIR__ . '/../config/config.php';
-
-if (file_exists($configPath)) {
-    /**
-     * @var mixed $loadedConfig
-     */
-    $loadedConfig = require $configPath;
-
-    if (is_array($loadedConfig)) {
-        $config = $loadedConfig;
-    }
-}
-
-$authConfig = [];
-
-if (isset($config['auth']) && is_array($config['auth'])) {
-    $authConfig = $config['auth'];
-}
-
-BasicAuth::enforce($authConfig);
 
 try {
     $storage = new TerminalStorage(__DIR__ . '/../var/terminals.json');
@@ -533,6 +509,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if ($terminal === null) {
             $errors[] = 'Das ausgewählte Terminal wurde nicht gefunden.';
         }
+    } elseif ($action === 'send_payment') {
+        $activeView = 'home';
+        $paymentForm = trimInput([
+            'terminal_id' => (string) ($_POST['terminal_id'] ?? ''),
+            'amount' => (string) ($_POST['amount'] ?? ''),
+            'currency' => (string) ($_POST['currency'] ?? 'EUR'),
+            'minor_unit' => (string) ($_POST['minor_unit'] ?? '2'),
+            'description' => (string) ($_POST['description'] ?? ''),
+            'return_url' => (string) ($_POST['return_url'] ?? ''),
+            'tip_rates' => (string) ($_POST['tip_rates'] ?? ''),
+            'tip_timeout' => (string) ($_POST['tip_timeout'] ?? ''),
+            'foreign_transaction_id' => (string) ($_POST['foreign_transaction_id'] ?? ''),
+        ]);
+
+        if ($paymentForm['terminal_id'] === '') {
+            $errors[] = 'Bitte wählen Sie ein Terminal aus.';
+        }
+
+        $terminal = $paymentForm['terminal_id'] !== '' ? $storage->find($paymentForm['terminal_id']) : null;
 
         $minorUnit = ctype_digit($paymentForm['minor_unit']) ? (int) $paymentForm['minor_unit'] : null;
 
@@ -666,15 +661,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $errors[] = 'Die Zahlungsantwort konnte nicht gespeichert werden: ' . $storageException->getMessage();
                 }
 
-                if ($transactionRecord['success'] === false) {
-                    if ($checkoutResult['error'] !== null) {
-                        $errors[] = 'Die Zahlung konnte nicht gesendet werden: ' . $checkoutResult['error'];
-                    } else {
-                        $errors[] = sprintf(
-                            'Die Zahlung konnte nicht gesendet werden. Die SumUp API antwortete mit Statuscode %d.',
-                            $checkoutResult['status']
-                        );
-                    }
+                if ($checkoutResult['error'] !== null) {
+                    $errors[] = 'Die Zahlung konnte nicht gesendet werden: ' . $checkoutResult['error'];
                 } else {
                     $successMessage = sprintf(
                         'Zahlung an %s gesendet (Betrag: %s %s, Foreign Transaction ID: %s%s).',
@@ -696,6 +684,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
         }
     }
+
+$terminals = $storage->all();
+
+if ($paymentForm['terminal_id'] === '' && $terminals !== []) {
+    $paymentForm['terminal_id'] = $terminals[0]['id'];
+}
 
 $terminals = $storage->all();
 
