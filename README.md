@@ -35,7 +35,7 @@ Dieses Projekt stellt eine einfache PHP-Weboberfläche bereit, mit der du den Re
 Anstatt den SumUp-API-Key in `config/config.php` abzulegen, kannst du ihn nach der Einrichtung über `http://localhost:8000/anmeldung.php` sicher hinterlegen:
 
 1. Melde dich mit den in der Konfiguration hinterlegten Zugangsdaten (HTTP Basic Auth) an.
-2. Trage optional deinen Händlercode (z. B. `MCRNF79M`) ein und füge den SumUp-API-Key ein.
+2. Trage optional deinen Händlercode (z. B. `MC98FXXX`) ein und füge den SumUp-API-Key ein.
 3. Nach dem Speichern verschlüsselt die Anwendung den Schlüssel mit der PHP-Erweiterung **libsodium** (`sodium`) und legt ihn in `var/sumup_credentials.json` ab; der dazugehörige Schlüssel liegt in `var/secure_store.key`.
 4. Kehre zur Kasse (`index.php`) zurück. Die Anwendung lädt den Schlüssel automatisch und zeigt an, wann er zuletzt aktualisiert wurde.
 
