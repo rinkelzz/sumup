@@ -8,36 +8,38 @@ use SumUp\BasicAuth;
 require_once __DIR__ . '/../src/TerminalStorage.php';
 require_once __DIR__ . '/../src/BasicAuth.php';
 
-function renderFatalError(string $message, int $statusCode = 500): void
+try {
+    $storage = new TerminalStorage(__DIR__ . '/../var/terminals.json');
+} catch (\Throwable $exception) {
+    http_response_code(500);
+    header('Content-Type: text/plain; charset=UTF-8');
+    echo 'Die Terminalverwaltung konnte nicht initialisiert werden: ' . $exception->getMessage();
+    exit;
+}
+
+/**
+ * @param array<string, string> $data
+ */
+function trimInput(array $data): array
 {
-    http_response_code($statusCode);
-    header('Content-Type: text/html; charset=UTF-8');
+    return array_map(
+        static function (string $value): string {
+            return trim($value);
+        },
+        $data
+    );
+}
 
-    $safeMessage = htmlspecialchars($message, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+function maskCredential(string $credential): string
+{
+    $length = strlen($credential);
 
-    echo <<<HTML
-<!DOCTYPE html>
-<html lang="de">
-<head>
-    <meta charset="utf-8">
-    <title>Fehler – SumUp Terminal</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <style>
-        :root {
-            color-scheme: light dark;
-            font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
-        }
+    if ($length <= 8) {
+        return str_repeat('•', $length);
+    }
 
-        body {
-            margin: 0;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            min-height: 100vh;
-            background: #0f172a;
-            color: #f9fafb;
-            padding: 2rem;
-        }
+    return substr($credential, 0, 6) . '…' . substr($credential, -4);
+}
 
         .card {
             background: #111827;
@@ -48,44 +50,32 @@ function renderFatalError(string $message, int $statusCode = 500): void
             box-shadow: 0 1.5rem 3rem rgba(15, 23, 42, 0.35);
         }
 
-        h1 {
-            margin-top: 0;
-            margin-bottom: 1rem;
-            font-size: 1.75rem;
-        }
-
-        p {
-            margin: 0;
-            line-height: 1.6;
-        }
-    </style>
-</head>
-<body>
-    <div class="card">
-        <h1>Es ist ein Fehler aufgetreten</h1>
-        <p>{$safeMessage}</p>
-    </div>
-</body>
-</html>
-HTML;
-
-    exit;
-}
-
-$configPath = __DIR__ . '/../config/config.php';
-
-if (!file_exists($configPath)) {
-    renderFatalError('Konfigurationsdatei nicht gefunden. Bitte kopieren Sie config/config.example.php nach config/config.php.');
-}
-
 /**
- * @var mixed $config
+ * @return array{value:int, formatted:string}
  */
-$config = require $configPath;
+function convertAmountToMinorUnits(string $amount, int $minorUnit): array
+{
+    if ($minorUnit < 0 || $minorUnit > 6) {
+        throw new InvalidArgumentException('Die Anzahl der Nachkommastellen muss zwischen 0 und 6 liegen.');
+    }
 
-if (!is_array($config)) {
-    renderFatalError('Die Konfigurationsdatei muss ein Array zurückgeben. Bitte prüfen Sie config/config.php.');
-}
+    $normalized = str_replace(',', '.', $amount);
+
+    if ($normalized === '' || !preg_match('/^\d+(?:\.\d+)?$/', $normalized)) {
+        throw new InvalidArgumentException('Der Betrag muss eine positive Zahl sein.');
+    }
+
+    [$whole, $fraction] = array_pad(explode('.', $normalized, 2), 2, '');
+
+    if ($minorUnit === 0 && $fraction !== '') {
+        throw new InvalidArgumentException('Für Beträge ohne Nachkommastellen darf keine Dezimalstelle angegeben werden.');
+    }
+
+    if (strlen($fraction) > $minorUnit) {
+        throw new InvalidArgumentException(sprintf('Maximal %d Nachkommastellen erlaubt.', $minorUnit));
+    }
+
+    $fraction = substr($fraction . str_repeat('0', $minorUnit), 0, $minorUnit);
 
 $authConfig = [];
 
@@ -141,7 +131,6 @@ function generateForeignTransactionId(): string
     } catch (\Throwable $exception) {
         return 'ft_' . uniqid();
     }
-}
 
 /**
  * @return array{value:int, formatted:string}
