@@ -47,6 +47,10 @@ return [
         // Absolute or relative path where transaction attempts will be appended (will be created automatically)
         'transactions_file' => __DIR__ . '/../var/transactions.log',
     ],
+    'webhook' => [
+        // Shared secret used to authenticate incoming webhook calls (set the same value in SumUp's dashboard)
+        'shared_secret' => 'change-me',
+    ],
     'secure_store' => [
         // Files used by the encrypted credential store (not committed to Git)
         'credential_file' => __DIR__ . '/../var/sumup_credentials.json',
