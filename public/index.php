@@ -3,8 +3,103 @@
 declare(strict_types=1);
 
 use App\TerminalStorage;
+use SumUp\BasicAuth;
 
+require_once __DIR__ . '/../src/BasicAuth.php';
 require_once __DIR__ . '/../src/TerminalStorage.php';
+
+function renderFatalError(string $message, int $statusCode = 500): void
+{
+    http_response_code($statusCode);
+    header('Content-Type: text/html; charset=UTF-8');
+
+    $safeMessage = htmlspecialchars($message, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+
+    echo <<<HTML
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="utf-8">
+    <title>Fehler – SumUp Verwaltung</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+        :root {
+            color-scheme: light dark;
+            font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+        }
+
+        body {
+            margin: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            background: #0f172a;
+            color: #f9fafb;
+            padding: 2rem;
+        }
+
+        .card {
+            background: #111827;
+            border-radius: 1rem;
+            padding: 2.5rem 2rem;
+            max-width: 32rem;
+            text-align: center;
+            box-shadow: 0 1.5rem 3rem rgba(15, 23, 42, 0.35);
+        }
+
+        h1 {
+            margin-top: 0;
+            margin-bottom: 1rem;
+            font-size: 1.75rem;
+        }
+
+        p {
+            margin: 0;
+            line-height: 1.6;
+        }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <h1>Es ist ein Fehler aufgetreten</h1>
+        <p>{$safeMessage}</p>
+    </div>
+</body>
+</html>
+HTML;
+
+try {
+    $storage = new TerminalStorage(__DIR__ . '/../var/terminals.json');
+} catch (\Throwable $exception) {
+    http_response_code(500);
+    header('Content-Type: text/plain; charset=UTF-8');
+    echo 'Die Terminalverwaltung konnte nicht initialisiert werden: ' . $exception->getMessage();
+    exit;
+}
+
+/**
+ * @param array<string, string> $data
+ */
+function trimInput(array $data): array
+{
+    return array_map(static fn(string $value): string => trim($value), $data);
+}
+
+$authConfig = [];
+
+if (isset($config['auth'])) {
+    if (!is_array($config['auth'])) {
+        renderFatalError('Der Abschnitt "auth" muss ein Array sein. Bitte korrigieren Sie config/config.php.');
+    }
+
+    /**
+     * @var array{realm?: string, users?: array<string, string>} $authConfig
+     */
+    $authConfig = $config['auth'];
+}
+
+BasicAuth::enforce($authConfig);
 
 try {
     $storage = new TerminalStorage(__DIR__ . '/../var/terminals.json');
@@ -41,7 +136,6 @@ function generateForeignTransactionId(): string
     } catch (\Throwable) {
         return 'ft_' . uniqid();
     }
-}
 
 /**
  * @return array{value:int, formatted:string}
@@ -265,6 +359,19 @@ function fetchTransactionByClientTransactionId(string $apiKey, string $clientTra
     return performSumUpGetRequest($apiKey, $url);
 }
 
+/**
+ * @return array{status:int, body:array<string, mixed>|null, raw:string, error:string|null}
+ */
+function fetchReadersForMerchant(string $apiKey, string $merchantCode): array
+{
+    $url = sprintf(
+        'https://api.sumup.com/v0.1/merchants/%s/readers',
+        rawurlencode($merchantCode)
+    );
+
+    return performSumUpGetRequest($apiKey, $url);
+}
+
 $terminalForm = [
     'label' => '',
     'merchant_code' => '',
@@ -291,6 +398,12 @@ $errors = [];
 $successMessage = null;
 $checkoutResult = null;
 $transactionMeta = null;
+$readerLookupForm = [
+    'merchant_code' => '',
+    'api_key' => '',
+];
+$fetchedReaders = null;
+$fetchedReadersRaw = null;
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $action = $_POST['action'] ?? '';
@@ -402,6 +515,48 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $storage->remove($terminalId);
             $successMessage = 'Terminal wurde entfernt.';
         }
+    } elseif ($action === 'fetch_readers') {
+        $readerLookupForm = trimInput([
+            'merchant_code' => (string) ($_POST['merchant_code'] ?? ''),
+            'api_key' => (string) ($_POST['api_key'] ?? ''),
+        ]);
+
+        foreach (['merchant_code', 'api_key'] as $required) {
+            if ($readerLookupForm[$required] === '') {
+                $errors[] = sprintf('Das Feld "%s" darf nicht leer sein.', $required);
+            }
+        }
+
+        if ($errors === []) {
+            $response = fetchReadersForMerchant($readerLookupForm['api_key'], $readerLookupForm['merchant_code']);
+
+            if ($response['error'] !== null || $response['status'] >= 400) {
+                $errors[] = $response['error'] !== null
+                    ? 'SumUp-Anfrage fehlgeschlagen: ' . $response['error']
+                    : sprintf('SumUp hat die Leserliste mit HTTP %d beantwortet.', $response['status']);
+            } elseif ($response['body'] === null) {
+                $errors[] = 'Die Antwort von SumUp konnte nicht verarbeitet werden.';
+            } else {
+                $data = $response['body'];
+                $items = [];
+
+                if (isset($data['items']) && is_array($data['items'])) {
+                    $items = array_values(array_filter($data['items'], 'is_array'));
+                } elseif (is_array($data)) {
+                    $items = [];
+
+                    foreach ($data as $entry) {
+                        if (is_array($entry)) {
+                            $items[] = $entry;
+                        }
+                    }
+                }
+
+                $fetchedReaders = $items;
+                $fetchedReadersRaw = $response['raw'];
+                $successMessage = sprintf('Es wurden %d Terminal(s) vom SumUp-Konto geladen.', count($items));
+            }
+        }
     } elseif ($action === 'send_payment') {
         $paymentForm = trimInput([
             'terminal_id' => (string) ($_POST['terminal_id'] ?? ''),
@@ -507,18 +662,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
                 if ($checkoutResult['error'] !== null) {
                     $errors[] = 'Die Zahlung konnte nicht gesendet werden: ' . $checkoutResult['error'];
-                } elseif ($checkoutResult['status'] < 200 || $checkoutResult['status'] >= 300) {
-                    $errorDetails = '';
-
-                    if (is_array($checkoutResult['body']) && isset($checkoutResult['body']['message']) && is_string($checkoutResult['body']['message'])) {
-                        $errorDetails = ' (' . $checkoutResult['body']['message'] . ')';
-                    }
-
-                    $errors[] = sprintf(
-                        'Die Zahlung konnte nicht gesendet werden: SumUp antwortete mit HTTP-Status %d%s.',
-                        $checkoutResult['status'],
-                        $errorDetails
-                    );
                 } else {
                     $clientTransactionId = null;
 
@@ -916,6 +1059,63 @@ foreach ($terminals as $terminal) {
         </section>
     </div>
 
+    <section class="card" style="margin-top: 2rem;">
+        <h2>Terminals vom SumUp-Konto abrufen</h2>
+        <form method="post" autocomplete="off" style="margin-bottom: 1.5rem;">
+            <input type="hidden" name="action" value="fetch_readers">
+
+            <label for="lookup-merchant-code">Merchant Code</label>
+            <input id="lookup-merchant-code" name="merchant_code" required value="<?= h($readerLookupForm['merchant_code']) ?>">
+
+            <label for="lookup-api-key">SumUp Secret Key (Bearer Token)</label>
+            <input id="lookup-api-key" name="api_key" required value="<?= h($readerLookupForm['api_key']) ?>">
+
+            <div class="actions" style="margin-top: 1.5rem;">
+                <button type="submit">Reader abrufen</button>
+            </div>
+        </form>
+
+        <?php if (is_array($fetchedReaders)): ?>
+            <?php if ($fetchedReaders === []): ?>
+                <p class="muted">Für diesen Merchant wurden keine Terminals zurückgegeben.</p>
+            <?php else: ?>
+                <div style="overflow-x: auto;">
+                    <table>
+                        <thead>
+                        <tr>
+                            <th>Reader ID</th>
+                            <th>Bezeichnung</th>
+                            <th>Status</th>
+                            <th>Modell</th>
+                            <th>Seriennummer</th>
+                        </tr>
+                        </thead>
+                        <tbody>
+                        <?php foreach ($fetchedReaders as $reader): ?>
+                            <tr>
+                                <td><?= h((string) ($reader['id'] ?? ($reader['reader_id'] ?? ''))) ?></td>
+                                <td><?= h((string) ($reader['label'] ?? ($reader['description'] ?? ''))) ?></td>
+                                <td><?= h((string) ($reader['status'] ?? '')) ?></td>
+                                <td><?= h((string) ($reader['type'] ?? ($reader['model'] ?? ''))) ?></td>
+                                <td><?= h((string) ($reader['serial_number'] ?? ($reader['serial'] ?? ''))) ?></td>
+                            </tr>
+                        <?php endforeach; ?>
+                        </tbody>
+                    </table>
+                </div>
+            <?php endif; ?>
+
+            <?php if ($fetchedReadersRaw !== null): ?>
+                <details style="margin-top: 1rem;">
+                    <summary>Rohdaten anzeigen</summary>
+                    <pre style="white-space: pre-wrap; word-break: break-word; background: #0f172a; color: #e2e8f0; padding: 1rem; border-radius: 0.5rem;"><?= h($fetchedReadersRaw) ?></pre>
+                </details>
+            <?php endif; ?>
+        <?php else: ?>
+            <p class="muted">Gib deinen Merchant Code und den API Key ein, um die verbundenen Terminals anzeigen zu lassen.</p>
+        <?php endif; ?>
+    </section>
+
     <section class="card" style="margin-top: 2rem;" id="checkout">
         <h2>Zahlung an Terminal senden</h2>
         <?php if ($terminals === []): ?>
@@ -969,6 +1169,7 @@ foreach ($terminals as $terminal) {
                 </div>
             </form>
         <?php endif; ?>
+    </section>
 
         <?php if ($checkoutResult !== null): ?>
             <div class="response-block">
@@ -980,6 +1181,9 @@ foreach ($terminals as $terminal) {
                     <pre><?= h($checkoutResult['raw']) ?></pre>
                 <?php endif; ?>
             </div>
+            <pre id="transaction-status-details" class="hidden"></pre>
+        <?php else: ?>
+            <p class="muted">Sobald eine Zahlung gesendet wurde, erscheint hier der Live-Status.</p>
         <?php endif; ?>
     </section>
 
