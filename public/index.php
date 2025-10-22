@@ -573,6 +573,35 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
                 if ($checkoutResult['error'] !== null) {
                     $errors[] = 'Die Zahlung konnte nicht gesendet werden: ' . $checkoutResult['error'];
+                } elseif ($checkoutResult['status'] < 200 || $checkoutResult['status'] >= 300) {
+                    $body = $checkoutResult['body'];
+                    $details = null;
+
+                    if (is_array($body)) {
+                        if (isset($body['message']) && is_string($body['message'])) {
+                            $details = $body['message'];
+                        } elseif (isset($body['error_message']) && is_string($body['error_message'])) {
+                            $details = $body['error_message'];
+                        } elseif (isset($body['error_description']) && is_string($body['error_description'])) {
+                            $details = $body['error_description'];
+                        } else {
+                            $encoded = json_encode($body, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+                            if (is_string($encoded) && $encoded !== '') {
+                                $details = $encoded;
+                            }
+                        }
+                    }
+
+                    $errorMessage = sprintf(
+                        'SumUp hat die Zahlung mit HTTP %d beantwortet.',
+                        $checkoutResult['status']
+                    );
+
+                    if ($details !== null && $details !== '') {
+                        $errorMessage .= ' Details: ' . $details;
+                    }
+
+                    $errors[] = $errorMessage;
                 } else {
                     $clientTransactionId = null;
 
