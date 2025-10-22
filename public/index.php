@@ -573,6 +573,30 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
                 if ($checkoutResult['error'] !== null) {
                     $errors[] = 'Die Zahlung konnte nicht gesendet werden: ' . $checkoutResult['error'];
+                } elseif ($checkoutResult['status'] >= 400) {
+                    $errorDetail = null;
+
+                    if (is_array($checkoutResult['body'])) {
+                        if (isset($checkoutResult['body']['message']) && $checkoutResult['body']['message'] !== '') {
+                            $errorDetail = (string) $checkoutResult['body']['message'];
+                        } elseif (isset($checkoutResult['body']['error_message']) && $checkoutResult['body']['error_message'] !== '') {
+                            $errorDetail = (string) $checkoutResult['body']['error_message'];
+                        } elseif (isset($checkoutResult['body']['error_code']) && $checkoutResult['body']['error_code'] !== '') {
+                            $errorDetail = 'Fehlercode: ' . (string) $checkoutResult['body']['error_code'];
+                        }
+                    }
+
+                    if ($errorDetail === null || $errorDetail === '') {
+                        $errorDetail = $checkoutResult['raw'] !== ''
+                            ? $checkoutResult['raw']
+                            : 'Unbekannte Fehlermeldung.';
+                    }
+
+                    $errors[] = sprintf(
+                        'Die Zahlung wurde von SumUp abgelehnt (HTTP-Status %d): %s',
+                        $checkoutResult['status'],
+                        $errorDetail
+                    );
                 } else {
                     $clientTransactionId = null;
 
