@@ -507,6 +507,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
                 if ($checkoutResult['error'] !== null) {
                     $errors[] = 'Die Zahlung konnte nicht gesendet werden: ' . $checkoutResult['error'];
+                } elseif ($checkoutResult['status'] < 200 || $checkoutResult['status'] >= 300) {
+                    $errorDetails = '';
+
+                    if (is_array($checkoutResult['body']) && isset($checkoutResult['body']['message']) && is_string($checkoutResult['body']['message'])) {
+                        $errorDetails = ' (' . $checkoutResult['body']['message'] . ')';
+                    }
+
+                    $errors[] = sprintf(
+                        'Die Zahlung konnte nicht gesendet werden: SumUp antwortete mit HTTP-Status %d%s.',
+                        $checkoutResult['status'],
+                        $errorDetails
+                    );
                 } else {
                     $clientTransactionId = null;
 
