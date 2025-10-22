@@ -69,22 +69,21 @@ function renderFatalError(string $message, int $statusCode = 500): void
 </html>
 HTML;
 
+try {
+    $storage = new TerminalStorage(__DIR__ . '/../var/terminals.json');
+} catch (\Throwable $exception) {
+    http_response_code(500);
+    header('Content-Type: text/plain; charset=UTF-8');
+    echo 'Die Terminalverwaltung konnte nicht initialisiert werden: ' . $exception->getMessage();
     exit;
 }
 
-$configPath = __DIR__ . '/../config/config.php';
-
-if (!file_exists($configPath)) {
-    renderFatalError('Konfigurationsdatei nicht gefunden. Bitte kopieren Sie config/config.example.php nach config/config.php.');
-}
-
 /**
- * @var mixed $config
+ * @param array<string, string> $data
  */
-$config = require $configPath;
-
-if (!is_array($config)) {
-    renderFatalError('Die Konfigurationsdatei muss ein Array zurückgeben. Bitte prüfen Sie config/config.php.');
+function trimInput(array $data): array
+{
+    return array_map(static fn(string $value): string => trim($value), $data);
 }
 
 $authConfig = [];
@@ -137,7 +136,6 @@ function generateForeignTransactionId(): string
     } catch (\Throwable) {
         return 'ft_' . uniqid();
     }
-}
 
 /**
  * @return array{value:int, formatted:string}
@@ -1171,6 +1169,7 @@ foreach ($terminals as $terminal) {
                 </div>
             </form>
         <?php endif; ?>
+    </section>
 
         <?php if ($checkoutResult !== null): ?>
             <div class="response-block">
@@ -1182,6 +1181,9 @@ foreach ($terminals as $terminal) {
                     <pre><?= h($checkoutResult['raw']) ?></pre>
                 <?php endif; ?>
             </div>
+            <pre id="transaction-status-details" class="hidden"></pre>
+        <?php else: ?>
+            <p class="muted">Sobald eine Zahlung gesendet wurde, erscheint hier der Live-Status.</p>
         <?php endif; ?>
     </section>
 
