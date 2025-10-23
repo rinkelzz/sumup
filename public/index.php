@@ -716,6 +716,11 @@ if ($requestMethod === 'POST') {
             }
         }
     }
+
+$terminals = $storage->all();
+
+if ($paymentForm['terminal_id'] === '' && $terminals !== []) {
+    $paymentForm['terminal_id'] = $terminals[0]['id'];
 }
 
 $terminals = [];
