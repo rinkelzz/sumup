@@ -2,922 +2,1860 @@
 
 declare(strict_types=1);
 
-use SumUp\BasicAuth;
-use SumUp\CredentialStore;
-use SumUp\SumUpTerminalClient;
+use App\TerminalStorage;
+use App\TransactionStorage;
 
-require_once __DIR__ . '/../src/SumUpTerminalClient.php';
-require_once __DIR__ . '/../src/BasicAuth.php';
-require_once __DIR__ . '/../src/CredentialStore.php';
+require_once __DIR__ . '/../src/TerminalStorage.php';
+require_once __DIR__ . '/../src/TransactionStorage.php';
 
-function renderFatalError(string $message, int $statusCode = 500): void
-{
-    http_response_code($statusCode);
+try {
+    $storage = new TerminalStorage(__DIR__ . '/../var/terminals.json');
+    $transactionStorage = new TransactionStorage(__DIR__ . '/../var/transactions.json');
+} catch (\Throwable $exception) {
+    http_response_code(500);
     header('Content-Type: text/html; charset=UTF-8');
-
-    $safeMessage = htmlspecialchars($message, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
-
-    echo <<<HTML
-<!DOCTYPE html>
-<html lang="de">
-<head>
-    <meta charset="utf-8">
-    <title>Fehler – SumUp Terminal</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <style>
-        :root {
-            color-scheme: light dark;
-            font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
-        }
-
-        body {
-            margin: 0;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            min-height: 100vh;
-            background: #0f172a;
-            color: #f9fafb;
-            padding: 2rem;
-        }
-
-        .card {
-            background: #111827;
-            border-radius: 1rem;
-            padding: 2.5rem 2rem;
-            max-width: 32rem;
-            box-shadow: 0 1.5rem 3rem rgba(15, 23, 42, 0.35);
-        }
-
-        h1 {
-            margin-top: 0;
-            margin-bottom: 1rem;
-            font-size: 1.75rem;
-        }
-
-        p {
-            margin: 0;
-            line-height: 1.6;
-        }
-    </style>
-</head>
-<body>
-    <div class="card">
-        <h1>Es ist ein Fehler aufgetreten</h1>
-        <p>{$safeMessage}</p>
-    </div>
-</body>
-</html>
-HTML;
-
+    $message = htmlspecialchars($exception->getMessage(), ENT_QUOTES, 'UTF-8');
+    echo '<!DOCTYPE html>'
+        . '<html lang="de">'
+        . '<head>'
+        . '<meta charset="utf-8">'
+        . '<meta name="viewport" content="width=device-width, initial-scale=1">'
+        . '<title>Speicherfehler</title>'
+        . '<style>body{font-family:system-ui,-apple-system,\'Segoe UI\',sans-serif;background:#0f172a;color:#e2e8f0;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;padding:2rem;}main{max-width:40rem;background:#111c33;border-radius:1rem;padding:2rem;box-shadow:0 1.5rem 3rem rgba(15,23,42,0.35);}h1{margin-top:0;margin-bottom:1rem;font-size:1.8rem;}p{margin:0 0 1rem;}code{background:rgba(148,163,184,0.2);padding:0.15rem 0.35rem;border-radius:0.35rem;font-size:0.95rem;color:#f8fafc;}</style>'
+        . '</head>'
+        . '<body>'
+        . '<main>'
+        . '<h1>Datenspeicher nicht verfügbar</h1>'
+        . '<p>Die Anwendung konnte die lokalen Speicherdateien nicht initialisieren:</p>'
+        . '<p><strong>' . $message . '</strong></p>'
+        . '<p>Bitte stellen Sie sicher, dass das Verzeichnis <code>var</code> beschreibbar ist oder setzen Sie die Umgebungsvariable <code>SUMUP_STORAGE_DIR</code> auf ein beschreibbares Verzeichnis.</p>'
+        . '<p>Alternativ kann ein temporäres Verzeichnis (z.&nbsp;B. <code>/tmp</code>) mit Schreibrechten verwendet werden.</p>'
+        . '</main>'
+        . '</body>'
+        . '</html>';
     exit;
 }
 
-$configPath = __DIR__ . '/../config/config.php';
-
-if (!file_exists($configPath)) {
-    renderFatalError('Konfigurationsdatei nicht gefunden. Bitte kopieren Sie config/config.example.php nach config/config.php.');
-}
-
 /**
- * @var mixed $config
+ * @param array<string, string> $data
  */
-$config = require $configPath;
-
-if (!is_array($config)) {
-    renderFatalError('Die Konfigurationsdatei muss ein Array zurückgeben. Bitte prüfen Sie config/config.php.');
+function trimInput(array $data): array
+{
+    return array_map(
+        static function (string $value): string {
+            return trim($value);
+        },
+        $data
+    );
 }
 
-if (!isset($config['sumup']) || !is_array($config['sumup'])) {
-    renderFatalError('In der Konfigurationsdatei fehlt der Abschnitt "sumup". Bitte ergänzen Sie config/config.php.');
-}
+function maskCredential(string $credential): string
+{
+    $length = strlen($credential);
 
-foreach (['auth', 'log', 'secure_store'] as $section) {
-    if (isset($config[$section]) && !is_array($config[$section])) {
-        renderFatalError(sprintf('Der Abschnitt "%s" muss ein Array sein. Bitte korrigieren Sie config/config.php.', $section));
+    if ($length <= 8) {
+        return str_repeat('•', $length);
     }
+
+    return substr($credential, 0, 6) . '…' . substr($credential, -4);
 }
 
-/**
- * @var array{
- *     sumup: array{
- *         auth_method?: string,
- *         access_token?: string,
- *         api_key?: string,
- *         currency?: string,
- *         terminal_serial?: string,
- *         terminal_label?: string,
- *         terminals?: array<int|string, array{serial?: string,label?: string}|string>
- *     },
- *     auth?: array{realm?: string, users?: array<string, string>},
- *     log?: array{transactions_file?: string},
- *     secure_store?: array{credential_file?: string, key_file?: string}
- * } $config
- */
-
-$sumUpConfig = $config['sumup'] ?? [];
-$authMethod = strtolower((string) ($sumUpConfig['auth_method'] ?? ''));
-$apiKey = trim((string) ($sumUpConfig['api_key'] ?? ''));
-$accessToken = trim((string) ($sumUpConfig['access_token'] ?? ''));
-
-$secureStoreConfig = $config['secure_store'] ?? [];
-$credentialStore = null;
-$secureStoreError = null;
-$storedCredentialDetails = null;
-$credentialError = null;
-
-if (isset($secureStoreConfig['credential_file'], $secureStoreConfig['key_file'])) {
+function generateForeignTransactionId(): string
+{
     try {
-        $credentialStore = new CredentialStore(
-            (string) $secureStoreConfig['credential_file'],
-            (string) $secureStoreConfig['key_file']
-        );
-    } catch (Throwable $storeException) {
-        $secureStoreError = $storeException->getMessage();
+        return 'ft_' . bin2hex(random_bytes(8));
+    } catch (\Throwable $exception) {
+        return 'ft_' . uniqid();
     }
 }
 
-if ($authMethod === '') {
-    $authMethod = $accessToken !== '' ? 'oauth' : 'api_key';
-}
-
-if (!in_array($authMethod, ['api_key', 'oauth'], true)) {
-    renderFatalError('Ungültige SumUp-Authentifizierungsmethode. Erlaubt sind "api_key" oder "oauth".');
-}
-
-$credential = $authMethod === 'oauth' ? $accessToken : $apiKey;
-
-if ($credentialStore instanceof CredentialStore) {
-    $storedCredentialDetails = $credentialStore->getApiCredential();
-}
-
-$merchantCode = '';
-
-if (isset($sumUpConfig['merchant_code'])) {
-    $merchantCode = (string) $sumUpConfig['merchant_code'];
-} elseif (isset($sumUpConfig['merchant_id'])) {
-    // legacy naming support
-    $merchantCode = (string) $sumUpConfig['merchant_id'];
-}
-
-if ($merchantCode === '' && $storedCredentialDetails !== null && isset($storedCredentialDetails['merchant_id'])) {
-    $merchantCode = $storedCredentialDetails['merchant_id'];
-}
-
-$merchantCode = trim($merchantCode);
-
-$configurationWarnings = [];
-
-if ($authMethod === 'api_key' && $apiKey === '' && $storedCredentialDetails !== null) {
-    $apiKey = $storedCredentialDetails['api_key'];
-    $credential = $apiKey;
-}
-
-if ($credential === '') {
-    if ($authMethod === 'oauth') {
-        $credentialError = 'Kein OAuth Access Token konfiguriert. Bitte ergänzen Sie config/config.php.';
-    } else {
-        $credentialError = 'Kein SumUp API-Key konfiguriert. Bitte ergänzen Sie config/config.php.';
-
-        if ($credentialStore instanceof CredentialStore) {
-            $credentialError .= ' Alternativ können Sie Ihren Schlüssel über anmeldung.php sicher hinterlegen.';
-        }
+/**
+ * @return array{value:int, formatted:string}
+ */
+function convertAmountToMinorUnits(string $amount, int $minorUnit): array
+{
+    if ($minorUnit < 0 || $minorUnit > 6) {
+        throw new InvalidArgumentException('Die Anzahl der Nachkommastellen muss zwischen 0 und 6 liegen.');
     }
+
+    $normalized = str_replace(',', '.', $amount);
+
+    if ($normalized === '' || !preg_match('/^\d+(?:\.\d+)?$/', $normalized)) {
+        throw new InvalidArgumentException('Der Betrag muss eine positive Zahl sein.');
+    }
+
+    [$whole, $fraction] = array_pad(explode('.', $normalized, 2), 2, '');
+
+    if ($minorUnit === 0 && $fraction !== '') {
+        throw new InvalidArgumentException('Für Beträge ohne Nachkommastellen darf keine Dezimalstelle angegeben werden.');
+    }
+
+    if (strlen($fraction) > $minorUnit) {
+        throw new InvalidArgumentException(sprintf('Maximal %d Nachkommastellen erlaubt.', $minorUnit));
+    }
+
+    $fraction = substr($fraction . str_repeat('0', $minorUnit), 0, $minorUnit);
+
+    $scale = $minorUnit > 0 ? 10 ** $minorUnit : 1;
+    $value = ((int) $whole) * $scale + ($fraction === '' ? 0 : (int) $fraction);
+
+    if ($value <= 0) {
+        throw new InvalidArgumentException('Der Betrag muss größer als 0 sein.');
+    }
+
+    return [
+        'value' => $value,
+        'formatted' => number_format($value / $scale, $minorUnit, ',', '.'),
+    ];
 }
 
-if ($authMethod === 'api_key' && $credential !== '' && str_starts_with($credential, 'sum_pk_')) {
-    $configurationWarnings[] = 'Der eingetragene SumUp-Schlüssel beginnt mit "sum_pk_". Für Terminal-Aufrufe benötigen Sie den geheimen Schlüssel mit dem Präfix "sum_sk_" (Personal Access Token).';
-}
+/**
+ * @return float[]
+ */
+function parseTipRates(string $input): array
+{
+    if ($input === '') {
+        return [];
+    }
 
-if ($authMethod === 'api_key' && $merchantCode === '') {
-    $configurationWarnings[] = 'Für die Terminalsuche hinterlegen Sie Ihren Händlercode (z. B. MCRNF79M) in config/config.php oder auf anmeldung.php.';
-}
+    $parts = preg_split('/[\s,;]+/', $input);
+    $rates = [];
 
-$configurationWarnings = array_values(array_unique($configurationWarnings));
+    if ($parts === false) {
+        return $rates;
+    }
 
-$defaultTerminalSerial = (string) ($sumUpConfig['terminal_serial'] ?? '');
-$defaultTerminalLabel = (string) ($sumUpConfig['terminal_label'] ?? '');
-$currency = (string) ($sumUpConfig['currency'] ?? 'EUR');
+    foreach ($parts as $part) {
+        $part = trim(str_replace(',', '.', $part));
 
-/** @var array<int, array{serial:string,label:string}> $terminalOptions */
-$terminalOptions = [];
-/** @var array<string, string> $terminalLookup */
-$terminalLookup = [];
-$terminalWarnings = [];
-
-$terminalsConfig = $sumUpConfig['terminals'] ?? null;
-
-if (is_string($terminalsConfig) || is_int($terminalsConfig) || is_float($terminalsConfig)) {
-    $terminalsConfig = [$terminalsConfig];
-}
-
-if ($terminalsConfig !== null && !is_array($terminalsConfig)) {
-    $terminalWarnings[] = 'Die Konfiguration "sumup.terminals" muss entweder ein Array oder eine einfache Seriennummer sein. Bitte prüfen Sie config/config.php.';
-}
-
-if (is_array($terminalsConfig)) {
-    foreach ($terminalsConfig as $key => $terminalConfig) {
-        $serial = '';
-        $label = '';
-
-        if (is_array($terminalConfig)) {
-            $serial = trim((string) ($terminalConfig['serial'] ?? ''));
-            $keyRepresentsSerial = is_string($key) || is_int($key) || is_float($key);
-
-            if ($serial === '' && $keyRepresentsSerial) {
-                $serialFromKey = trim((string) $key);
-
-                if ($serialFromKey !== '') {
-                    $serial = $serialFromKey;
-                }
-            }
-
-            if (isset($terminalConfig['label'])) {
-                $label = trim((string) $terminalConfig['label']);
-            } elseif ($keyRepresentsSerial) {
-                $labelFromKey = trim((string) $key);
-
-                if ($labelFromKey !== '' && $labelFromKey !== $serial) {
-                    $label = $labelFromKey;
-                }
-            }
-        } elseif (is_string($terminalConfig) || is_int($terminalConfig) || is_float($terminalConfig)) {
-            $serial = trim((string) $terminalConfig);
-            $label = is_string($key) ? trim((string) $key) : '';
-        }
-
-        if ($serial === '') {
-            $humanReadableKey = is_string($key)
-                ? sprintf('Schlüssel "%s"', $key)
-                : sprintf('Index %d', (int) $key);
-
-            $terminalWarnings[] = sprintf(
-                'Der Terminaleintrag unter %s enthält keine Seriennummer. Bitte ergänzen Sie sie in config/config.php.',
-                $humanReadableKey
-            );
-
+        if ($part === '') {
             continue;
         }
 
-        if ($label === '') {
-            $label = $serial;
+        if (!is_numeric($part)) {
+            throw new InvalidArgumentException(sprintf('Ungültiger Trinkgeldsatz: %s', $part));
         }
 
-        $terminalOptions[] = [
-            'serial' => $serial,
-            'label' => $label,
-        ];
-        $terminalLookup[$serial] = $label;
+        $rate = (float) $part;
+
+        if ($rate > 1) {
+            $rate /= 100;
+        }
+
+        if ($rate <= 0 || $rate >= 1) {
+            throw new InvalidArgumentException(sprintf('Trinkgeldsätze müssen zwischen 0 und 1 liegen: %s', $part));
+        }
+
+        $rates[] = round($rate, 4);
     }
+
+    return array_values(array_unique($rates));
 }
-
-if ($terminalOptions === [] && $defaultTerminalSerial !== '') {
-    $label = $defaultTerminalLabel !== '' ? $defaultTerminalLabel : $defaultTerminalSerial;
-    $terminalOptions[] = [
-        'serial' => $defaultTerminalSerial,
-        'label' => $label,
-    ];
-    $terminalLookup[$defaultTerminalSerial] = $label;
-}
-
-if ($terminalOptions === [] && $terminalsConfig === null && $defaultTerminalSerial === '') {
-    $terminalWarnings[] = 'Es wurden noch keine Terminals konfiguriert. Öffnen Sie config/config.php und fügen Sie unter "sumup.terminals" mindestens ein Gerät hinzu (siehe config/config.example.php).';
-}
-
-$selectedTerminalSerial = '';
-$selectedTerminalLabel = '';
-
-if ($terminalOptions !== []) {
-    $selectedTerminalSerial = $terminalOptions[0]['serial'];
-    $selectedTerminalLabel = $terminalOptions[0]['label'];
-}
-
-$terminalDiscoveryResult = null;
-$terminalDiscoveryError = null;
-$terminalDiscoveryHints = [];
-$terminalDiscoveryDebug = null;
-
-$action = '';
-
-if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    $action = (string) ($_POST['action'] ?? 'send_payment');
-}
-
-$logConfig = $config['log'] ?? [];
-$transactionsLogFile = (string) ($logConfig['transactions_file'] ?? (__DIR__ . '/../var/transactions.log'));
-
-$authConfig = $config['auth'] ?? [];
-$username = BasicAuth::enforce($authConfig);
-
-$environmentErrors = [];
-
-if (!extension_loaded('curl')) {
-    $environmentErrors[] = 'Die PHP-Extension "curl" ist nicht installiert. Ohne sie können keine Zahlungsanforderungen an SumUp gesendet werden.';
-}
-
-$error = null;
-$result = null;
-$logError = null;
 
 /**
- * @param string $logFile
- * @param string $username
- * @param float  $amount
- * @param bool   $success
- * @param string $terminalSerial
- * @param string $terminalLabel
+ * @param array<string, mixed> $payload
+ * @return array{status:int, body:array<string, mixed>|null, raw:string, error:string|null}
  */
-function writeTransactionLog(
-    string $logFile,
-    string $username,
-    float $amount,
-    bool $success,
-    string $terminalSerial,
-    string $terminalLabel = ''
-): bool
+function sendCheckoutRequest(string $apiKey, string $merchantCode, string $readerId, array $payload): array
 {
-    $directory = dirname($logFile);
-
-    if ($directory !== '' && !is_dir($directory)) {
-        if (!mkdir($directory, 0775, true) && !is_dir($directory)) {
-            return false;
-        }
-    }
-
-    $terminalInfo = '-';
-
-    if ($terminalSerial !== '') {
-        $terminalInfo = $terminalSerial;
-
-        if ($terminalLabel !== '' && $terminalLabel !== $terminalSerial) {
-            $terminalInfo = sprintf('%s (%s)', $terminalLabel, $terminalSerial);
-        }
-    }
-
-    $line = sprintf(
-        "%s\t%s\t%s\t%s\t%s\n",
-        (new DateTimeImmutable('now'))->format('c'),
-        $username !== '' ? $username : '-',
-        $terminalInfo,
-        number_format($amount, 2, '.', ''),
-        $success ? 'success' : 'failure'
+    $endpoint = sprintf(
+        'https://api.sumup.com/v0.1/merchants/%s/readers/%s/checkout',
+        rawurlencode($merchantCode),
+        rawurlencode($readerId)
     );
 
-    return file_put_contents($logFile, $line, FILE_APPEND | LOCK_EX) !== false;
-}
+    $ch = curl_init($endpoint);
 
-if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    if ($credentialError !== null) {
-        $error = $credentialError;
+    if ($ch === false) {
+        return [
+            'status' => 0,
+            'body' => null,
+            'raw' => '',
+            'error' => 'cURL konnte nicht initialisiert werden.',
+        ];
     }
 
-    if ($credentialError === null) {
-        $amount = isset($_POST['amount']) ? (float) str_replace(',', '.', (string) $_POST['amount']) : 0.0;
-        $tipAmount = isset($_POST['tip_amount']) && $_POST['tip_amount'] !== ''
-            ? (float) str_replace(',', '.', (string) $_POST['tip_amount'])
-            : null;
-        $description = isset($_POST['description']) ? trim((string) $_POST['description']) : null;
-        $requestedTerminalSerial = isset($_POST['terminal_serial']) ? trim((string) $_POST['terminal_serial']) : '';
-        $externalId = sprintf('web-%s', bin2hex(random_bytes(4)));
+    $jsonPayload = json_encode($payload, JSON_UNESCAPED_SLASHES);
 
-        $paymentSuccessful = false;
+    if ($jsonPayload === false) {
+        curl_close($ch);
 
-        if ($terminalOptions === []) {
-            $error = 'Es ist kein SumUp-Terminal konfiguriert.';
-        } elseif ($requestedTerminalSerial !== '') {
-            if (array_key_exists($requestedTerminalSerial, $terminalOptions)) {
-                $selectedTerminalSerial = $requestedTerminalSerial;
-                $selectedTerminalLabel = $terminalOptions[$requestedTerminalSerial];
-            } else {
-                $error = 'Ausgewähltes Terminal ist ungültig oder nicht konfiguriert.';
+        return [
+            'status' => 0,
+            'body' => null,
+            'raw' => '',
+            'error' => 'Die Anfrage konnte nicht serialisiert werden.',
+        ];
+    }
+
+    curl_setopt_array($ch, [
+        CURLOPT_POST => true,
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_HTTPHEADER => [
+            'Content-Type: application/json',
+            'Authorization: Bearer ' . $apiKey,
+        ],
+        CURLOPT_POSTFIELDS => $jsonPayload,
+        CURLOPT_TIMEOUT => 30,
+    ]);
+
+    $response = curl_exec($ch);
+    $error = curl_error($ch);
+    $status = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    curl_close($ch);
+
+    if ($response === false) {
+        return [
+            'status' => $status,
+            'body' => null,
+            'raw' => '',
+            'error' => $error !== '' ? $error : 'Unbekannter cURL-Fehler.',
+        ];
+    }
+
+    $decoded = json_decode($response, true);
+
+    return [
+        'status' => $status,
+        'body' => is_array($decoded) ? $decoded : null,
+        'raw' => $response,
+        'error' => $error !== '' ? $error : null,
+    ];
+}
+
+/**
+ * @return array{status:int, body:array<string, mixed>|null, raw:string, error:string|null}
+ */
+function performSumUpGetRequest(string $apiKey, string $url): array
+{
+    $ch = curl_init($url);
+
+    if ($ch === false) {
+        return [
+            'status' => 0,
+            'body' => null,
+            'raw' => '',
+            'error' => 'cURL konnte nicht initialisiert werden.',
+        ];
+    }
+
+    curl_setopt_array($ch, [
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_HTTPHEADER => [
+            'Authorization: Bearer ' . $apiKey,
+        ],
+        CURLOPT_TIMEOUT => 30,
+    ]);
+
+    $response = curl_exec($ch);
+    $error = curl_error($ch);
+    $status = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    curl_close($ch);
+
+    if ($response === false) {
+        return [
+            'status' => $status,
+            'body' => null,
+            'raw' => '',
+            'error' => $error !== '' ? $error : 'Unbekannter cURL-Fehler.',
+        ];
+    }
+
+    $decoded = json_decode($response, true);
+
+    return [
+        'status' => $status,
+        'body' => is_array($decoded) ? $decoded : null,
+        'raw' => $response,
+        'error' => $error !== '' ? $error : null,
+    ];
+}
+
+/**
+ * @return array{status:int, body:array<string, mixed>|null, raw:string, error:string|null}
+ */
+function fetchTransactionByForeignTransactionId(string $apiKey, string $foreignTransactionId): array
+{
+    $url = 'https://api.sumup.com/v0.1/me/transactions?foreign_transaction_id=' . rawurlencode($foreignTransactionId);
+
+    return performSumUpGetRequest($apiKey, $url);
+}
+
+/**
+ * @return array{status:int, body:array<string, mixed>|null, raw:string, error:string|null}
+ */
+function fetchTransactionByClientTransactionId(string $apiKey, string $clientTransactionId): array
+{
+    $url = 'https://api.sumup.com/v0.1/me/transactions/' . rawurlencode($clientTransactionId);
+
+    return performSumUpGetRequest($apiKey, $url);
+}
+
+/**
+ * @return array{status:int, body:array<string, mixed>|null, raw:string, error:string|null}
+ */
+function fetchReadersForMerchant(string $apiKey, string $merchantCode): array
+{
+    $url = sprintf(
+        'https://api.sumup.com/v0.1/merchants/%s/readers',
+        rawurlencode($merchantCode)
+    );
+
+    return performSumUpGetRequest($apiKey, $url);
+}
+
+$terminalForm = [
+    'label' => '',
+    'merchant_code' => '',
+    'reader_id' => '',
+    'app_id' => '',
+    'affiliate_key' => '',
+    'api_key' => '',
+    'default_return_url' => '',
+];
+
+$paymentForm = [
+    'terminal_id' => '',
+    'amount' => '',
+    'currency' => 'EUR',
+    'minor_unit' => '2',
+    'description' => '',
+    'return_url' => '',
+    'tip_rates' => '',
+    'tip_timeout' => '',
+    'foreign_transaction_id' => generateForeignTransactionId(),
+];
+
+$errors = [];
+$successMessage = null;
+$checkoutResult = null;
+$transactionMeta = null;
+$latestTransactionRecord = null;
+$readerLookupForm = [
+    'merchant_code' => '',
+    'api_key' => '',
+];
+$fetchedReaders = null;
+$fetchedReadersRaw = null;
+$allowedViews = ['home', 'terminals', 'settings'];
+$activeView = 'home';
+$terminalStorageError = null;
+$transactionStorageError = null;
+$requestMethod = isset($_SERVER['REQUEST_METHOD']) ? (string) $_SERVER['REQUEST_METHOD'] : 'GET';
+
+if (isset($_GET['view']) && in_array($_GET['view'], $allowedViews, true)) {
+    $activeView = (string) $_GET['view'];
+}
+
+if ($requestMethod === 'POST') {
+    $action = $_POST['action'] ?? '';
+    $requestedView = (string) ($_POST['current_view'] ?? '');
+
+    if (in_array($requestedView, $allowedViews, true)) {
+        $activeView = $requestedView;
+    }
+
+    if ($action === 'transaction_status') {
+        $terminalId = (string) ($_POST['terminal_id'] ?? '');
+        $foreignTransactionId = trim((string) ($_POST['foreign_transaction_id'] ?? ''));
+        $clientTransactionId = trim((string) ($_POST['client_transaction_id'] ?? ''));
+        $terminal = null;
+
+        header('Content-Type: application/json; charset=UTF-8');
+
+        if ($terminalId !== '') {
+            try {
+                $terminal = $storage->find($terminalId);
+            } catch (\Throwable $storageException) {
+                echo json_encode([
+                    'ok' => false,
+                    'error' => 'Terminalspeicher konnte nicht gelesen werden: ' . $storageException->getMessage(),
+                ]);
+                exit;
             }
-        } elseif (count($terminalOptions) > 1) {
-            $error = 'Bitte wählen Sie ein Terminal aus.';
         }
 
-        if ($error === null && $environmentErrors === []) {
-            try {
-                $client = new SumUpTerminalClient($credential, $selectedTerminalSerial, $authMethod);
-                $response = $client->sendPayment($amount, $currency, $externalId, $description, $tipAmount);
+        if ($terminal === null) {
+            echo json_encode([
+                'ok' => false,
+                'error' => 'Terminal nicht gefunden.',
+            ]);
+            exit;
+        }
 
-                if ($response['status'] >= 200 && $response['status'] < 300) {
-                    $paymentSuccessful = true;
-                    $terminalDisplayName = $selectedTerminalLabel !== '' ? $selectedTerminalLabel : $selectedTerminalSerial;
-                    $result = [
-                        'title' => 'Zahlungsanforderung gesendet',
-                        'message' => $terminalDisplayName !== ''
-                            ? sprintf(
-                                'Der Betrag wurde an das Terminal "%s" übertragen. Warten Sie auf die Bestätigung auf dem Gerät.',
-                                $terminalDisplayName
-                            )
-                            : 'Der Betrag wurde an das Terminal übertragen. Warten Sie auf die Bestätigung auf dem Gerät.',
-                        'details' => $response['body'],
-                    ];
+        if ($foreignTransactionId === '' && $clientTransactionId === '') {
+            echo json_encode([
+                'ok' => false,
+                'error' => 'Es wurde keine Transaktions-ID übermittelt.',
+            ]);
+            exit;
+        }
+
+        if ($clientTransactionId !== '') {
+            $status = fetchTransactionByClientTransactionId($terminal['api_key'], $clientTransactionId);
+        } else {
+            $status = fetchTransactionByForeignTransactionId($terminal['api_key'], $foreignTransactionId);
+        }
+
+        $body = $status['body'];
+        $statusLabel = null;
+
+        if (is_array($body)) {
+            $statusLabel = $body['status'] ?? ($body['transaction_status'] ?? null);
+        }
+
+        $finalStatuses = ['SUCCESSFUL', 'PAID', 'FAILED', 'DECLINED', 'CANCELED', 'CANCELLED', 'REFUNDED'];
+        $isFinal = false;
+
+        if (is_string($statusLabel)) {
+            $upper = strtoupper($statusLabel);
+            $isFinal = in_array($upper, $finalStatuses, true);
+        }
+
+        $httpError = $status['status'] >= 400;
+        $errorMessage = $status['error'];
+
+        if ($httpError && $errorMessage === null) {
+            $errorMessage = sprintf('SumUp hat den Status mit HTTP %d zurückgegeben.', $status['status']);
+        }
+
+        echo json_encode([
+            'ok' => !$httpError && $status['error'] === null,
+            'status_code' => $status['status'],
+            'body' => $body,
+            'raw' => $status['raw'],
+            'error' => $errorMessage,
+            'final' => $isFinal,
+            'display_status' => $statusLabel,
+        ]);
+        exit;
+    }
+
+    if ($action === 'add_terminal') {
+        $activeView = 'settings';
+        $terminalForm = trimInput([
+            'label' => (string) ($_POST['label'] ?? ''),
+            'merchant_code' => (string) ($_POST['merchant_code'] ?? ''),
+            'reader_id' => (string) ($_POST['reader_id'] ?? ''),
+            'app_id' => (string) ($_POST['app_id'] ?? ''),
+            'affiliate_key' => (string) ($_POST['affiliate_key'] ?? ''),
+            'api_key' => (string) ($_POST['api_key'] ?? ''),
+            'default_return_url' => (string) ($_POST['default_return_url'] ?? ''),
+        ]);
+
+        foreach (['label', 'merchant_code', 'reader_id', 'app_id', 'affiliate_key', 'api_key'] as $required) {
+            if ($terminalForm[$required] === '') {
+                $errors[] = sprintf('Das Feld "%s" darf nicht leer sein.', $required);
+            }
+        }
+
+        if ($terminalForm['default_return_url'] !== '' && !filter_var($terminalForm['default_return_url'], FILTER_VALIDATE_URL)) {
+            $errors[] = 'Die Standard-Return-URL ist ungültig.';
+        }
+
+        if ($errors === []) {
+            try {
+                $storage->add($terminalForm);
+                $successMessage = 'Terminal wurde gespeichert.';
+                $terminalForm = [
+                    'label' => '',
+                    'merchant_code' => '',
+                    'reader_id' => '',
+                    'app_id' => '',
+                    'affiliate_key' => '',
+                    'api_key' => '',
+                    'default_return_url' => '',
+                ];
+            } catch (\Throwable $storageException) {
+                $errors[] = 'Terminal konnte nicht gespeichert werden: ' . $storageException->getMessage();
+            }
+        }
+    } elseif ($action === 'delete_terminal') {
+        $activeView = 'terminals';
+        $terminalId = (string) ($_POST['terminal_id'] ?? '');
+
+        if ($terminalId === '') {
+            $errors[] = 'Es wurde kein Terminal zum Löschen ausgewählt.';
+        } else {
+            try {
+                $storage->remove($terminalId);
+                $successMessage = 'Terminal wurde entfernt.';
+            } catch (\Throwable $storageException) {
+                $errors[] = 'Terminal konnte nicht entfernt werden: ' . $storageException->getMessage();
+            }
+        }
+    } elseif ($action === 'fetch_readers') {
+        $activeView = 'settings';
+        $readerLookupForm = trimInput([
+            'merchant_code' => (string) ($_POST['merchant_code'] ?? ''),
+            'api_key' => (string) ($_POST['api_key'] ?? ''),
+        ]);
+
+        foreach (['merchant_code', 'api_key'] as $required) {
+            if ($readerLookupForm[$required] === '') {
+                $errors[] = sprintf('Das Feld "%s" darf nicht leer sein.', $required);
+            }
+        }
+
+        if ($errors === []) {
+            $response = fetchReadersForMerchant($readerLookupForm['api_key'], $readerLookupForm['merchant_code']);
+
+            if ($response['error'] !== null || $response['status'] >= 400) {
+                $errors[] = $response['error'] !== null
+                    ? 'SumUp-Anfrage fehlgeschlagen: ' . $response['error']
+                    : sprintf('SumUp hat die Leserliste mit HTTP %d beantwortet.', $response['status']);
+            } elseif ($response['body'] === null) {
+                $errors[] = 'Die Antwort von SumUp konnte nicht verarbeitet werden.';
+            } else {
+                $data = $response['body'];
+                $items = [];
+
+                if (isset($data['items']) && is_array($data['items'])) {
+                    $items = array_values(array_filter($data['items'], 'is_array'));
+                } elseif (is_array($data)) {
+                    $items = [];
+
+                    foreach ($data as $entry) {
+                        if (is_array($entry)) {
+                            $items[] = $entry;
+                        }
+                    }
+                }
+
+                $fetchedReaders = $items;
+                $fetchedReadersRaw = $response['raw'];
+                $successMessage = sprintf('Es wurden %d Terminal(s) vom SumUp-Konto geladen.', count($items));
+            }
+        }
+    } elseif ($action === 'send_payment') {
+        $activeView = 'home';
+        $paymentForm = trimInput([
+            'terminal_id' => (string) ($_POST['terminal_id'] ?? ''),
+            'amount' => (string) ($_POST['amount'] ?? ''),
+            'currency' => (string) ($_POST['currency'] ?? 'EUR'),
+            'minor_unit' => (string) ($_POST['minor_unit'] ?? '2'),
+            'description' => (string) ($_POST['description'] ?? ''),
+            'return_url' => (string) ($_POST['return_url'] ?? ''),
+            'tip_rates' => (string) ($_POST['tip_rates'] ?? ''),
+            'tip_timeout' => (string) ($_POST['tip_timeout'] ?? ''),
+            'foreign_transaction_id' => (string) ($_POST['foreign_transaction_id'] ?? ''),
+        ]);
+
+        if ($paymentForm['terminal_id'] === '') {
+            $errors[] = 'Bitte wählen Sie ein Terminal aus.';
+        }
+
+        $terminalLookupFailed = false;
+        $terminal = null;
+
+        if ($paymentForm['terminal_id'] !== '') {
+            try {
+                $terminal = $storage->find($paymentForm['terminal_id']);
+            } catch (\Throwable $storageException) {
+                $errors[] = 'Das Terminal konnte nicht geladen werden: ' . $storageException->getMessage();
+                $terminalLookupFailed = true;
+            }
+        }
+
+        if (!$terminalLookupFailed && $terminal === null) {
+            $errors[] = 'Das ausgewählte Terminal wurde nicht gefunden.';
+        }
+
+        $minorUnit = ctype_digit($paymentForm['minor_unit']) ? (int) $paymentForm['minor_unit'] : null;
+
+        if ($minorUnit === null) {
+            $errors[] = 'Die Anzahl der Nachkommastellen ist ungültig.';
+        }
+
+        if ($paymentForm['currency'] === '') {
+            $errors[] = 'Bitte geben Sie eine Währung an (z. B. EUR).';
+        }
+
+        if ($paymentForm['return_url'] !== '' && !filter_var($paymentForm['return_url'], FILTER_VALIDATE_URL)) {
+            $errors[] = 'Die Return-URL ist ungültig.';
+        }
+
+        $foreignTransactionId = $paymentForm['foreign_transaction_id'] !== ''
+            ? $paymentForm['foreign_transaction_id']
+            : generateForeignTransactionId();
+
+        if ($errors === []) {
+            try {
+                $minorUnitValue = $minorUnit ?? 2;
+                $amount = convertAmountToMinorUnits($paymentForm['amount'], $minorUnitValue);
+            } catch (\Throwable $amountException) {
+                $errors[] = $amountException->getMessage();
+            }
+
+            try {
+                $tipRates = parseTipRates($paymentForm['tip_rates']);
+            } catch (\Throwable $tipException) {
+                $errors[] = $tipException->getMessage();
+            }
+
+            if ($errors === [] && isset($amount, $terminal)) {
+                $minorUnitValue = $minorUnit ?? 2;
+                $payload = [
+                    'affiliate' => [
+                        'app_id' => $terminal['app_id'],
+                        'foreign_transaction_id' => $foreignTransactionId,
+                        'key' => $terminal['affiliate_key'],
+                        'tags' => new stdClass(),
+                    ],
+                    'total_amount' => [
+                        'currency' => strtoupper($paymentForm['currency']),
+                        'minor_unit' => $minorUnitValue,
+                        'value' => $amount['value'],
+                    ],
+                ];
+
+                if ($paymentForm['description'] !== '') {
+                    $payload['description'] = $paymentForm['description'];
+                }
+
+                $returnUrl = $paymentForm['return_url'] !== ''
+                    ? $paymentForm['return_url']
+                    : ($terminal['default_return_url'] ?? '');
+
+                if ($returnUrl !== '') {
+                    $payload['return_url'] = $returnUrl;
+                    $paymentForm['return_url'] = $returnUrl;
+                }
+
+                if ($tipRates !== []) {
+                    $payload['tip_rates'] = $tipRates;
+                }
+
+                if ($paymentForm['tip_timeout'] !== '') {
+                    $tipTimeout = (int) $paymentForm['tip_timeout'];
+
+                    if ($tipTimeout > 0) {
+                        $payload['tip_timeout'] = $tipTimeout;
+                    }
+                }
+
+                $checkoutResult = sendCheckoutRequest(
+                    $terminal['api_key'],
+                    $terminal['merchant_code'],
+                    $terminal['reader_id'],
+                    $payload
+                );
+
+                $clientTransactionId = null;
+                $statusLabel = null;
+
+                if (is_array($checkoutResult['body'] ?? null)) {
+                    if (isset($checkoutResult['body']['client_transaction_id'])) {
+                        $clientTransactionId = (string) $checkoutResult['body']['client_transaction_id'];
+                    }
+
+                    $statusLabel = (string) ($checkoutResult['body']['status'] ?? ($checkoutResult['body']['transaction_status'] ?? ''));
+                }
+
+                $requestSnapshot = [
+                    'total_amount' => [
+                        'currency' => strtoupper($paymentForm['currency']),
+                        'minor_unit' => $minorUnitValue,
+                        'value' => $amount['value'],
+                        'formatted' => $amount['formatted'],
+                    ],
+                    'description' => $payload['description'] ?? null,
+                    'return_url' => $payload['return_url'] ?? null,
+                ];
+
+                if (isset($payload['tip_rates'])) {
+                    $requestSnapshot['tip_rates'] = $payload['tip_rates'];
+                }
+
+                if (isset($payload['tip_timeout'])) {
+                    $requestSnapshot['tip_timeout'] = $payload['tip_timeout'];
+                }
+
+                $transactionRecord = [
+                    'terminal_id' => $terminal['id'] ?? $paymentForm['terminal_id'],
+                    'terminal_label' => $terminal['label'],
+                    'foreign_transaction_id' => $foreignTransactionId,
+                    'client_transaction_id' => $clientTransactionId,
+                    'status_code' => $checkoutResult['status'],
+                    'status_label' => $statusLabel,
+                    'success' => $checkoutResult['error'] === null && $checkoutResult['status'] < 400,
+                    'error_message' => $checkoutResult['error'],
+                    'response_body' => $checkoutResult['body'],
+                    'response_raw' => $checkoutResult['raw'],
+                    'request' => $requestSnapshot,
+                    'created_at' => date('c'),
+                ];
+
+                try {
+                    $transactionStorage->add($transactionRecord);
+                    $latestTransactionRecord = $transactionRecord;
+                } catch (\Throwable $storageException) {
+                    $errors[] = 'Die Zahlungsantwort konnte nicht gespeichert werden: ' . $storageException->getMessage();
+                }
+
+                if ($checkoutResult['error'] !== null) {
+                    $errors[] = 'Die Zahlung konnte nicht gesendet werden: ' . $checkoutResult['error'];
                 } else {
-                    $error = sprintf(
-                        'Fehler beim Senden der Zahlungsanforderung (HTTP %d).',
-                        $response['status']
+                    $successMessage = sprintf(
+                        'Zahlung an %s gesendet (Betrag: %s %s, Foreign Transaction ID: %s%s).',
+                        $terminal['label'],
+                        number_format($amount['value'] / (10 ** $minorUnitValue), $minorUnitValue, ',', '.'),
+                        strtoupper($paymentForm['currency']),
+                        $foreignTransactionId,
+                        $clientTransactionId !== null && $clientTransactionId !== ''
+                            ? ', Client Transaction ID: ' . $clientTransactionId
+                            : ''
                     );
-                    $result = [
-                        'title' => 'Antwort des SumUp-Servers',
-                        'details' => $response['body'],
+                    $paymentForm['foreign_transaction_id'] = generateForeignTransactionId();
+                    $transactionMeta = [
+                        'terminal_id' => $terminal['id'] ?? $paymentForm['terminal_id'],
+                        'foreign_transaction_id' => $foreignTransactionId,
+                        'client_transaction_id' => $clientTransactionId,
                     ];
                 }
-            } catch (Throwable $exception) {
-                $error = $exception->getMessage();
             }
-        }
-
-        if (!writeTransactionLog(
-            $transactionsLogFile,
-            $username,
-            $amount,
-            $paymentSuccessful,
-            $selectedTerminalSerial,
-            $selectedTerminalLabel
-        )) {
-            $logError = 'Transaktionsprotokoll konnte nicht geschrieben werden. Bitte überprüfen Sie die Schreibrechte.';
         }
     }
 }
 
-$formDisabled = $terminalOptions === [] || $environmentErrors !== [] || $credentialError !== null;
+$terminals = [];
+
+try {
+    $terminals = $storage->all();
+} catch (\Throwable $storageException) {
+    $terminalStorageError = 'Die Terminals konnten nicht geladen werden: ' . $storageException->getMessage();
+}
+
+if ($paymentForm['terminal_id'] === '' && $terminals !== []) {
+    $paymentForm['terminal_id'] = $terminals[0]['id'];
+}
+
+if ($paymentForm['return_url'] === '' && $terminals !== []) {
+    $first = $terminals[0]['default_return_url'] ?? '';
+    if ($first !== '') {
+        $paymentForm['return_url'] = $first;
+    }
+}
+
+$terminalsById = [];
+foreach ($terminals as $terminal) {
+    if (isset($terminal['id'])) {
+        $terminalsById[$terminal['id']] = $terminal;
+    }
+}
+
+$transactionsByTerminal = [];
+$orphanTransactions = [];
+$allTransactions = [];
+
+try {
+    $allTransactions = $transactionStorage->all();
+} catch (\Throwable $storageException) {
+    $transactionStorageError = 'Die gespeicherten Zahlungen konnten nicht geladen werden: ' . $storageException->getMessage();
+}
+
+foreach ($allTransactions as $transaction) {
+    if (!is_array($transaction)) {
+        continue;
+    }
+
+    $terminalId = isset($transaction['terminal_id']) ? (string) $transaction['terminal_id'] : '';
+
+    if ($terminalId !== '' && isset($terminalsById[$terminalId])) {
+        if (!isset($transactionsByTerminal[$terminalId])) {
+            $transactionsByTerminal[$terminalId] = [];
+        }
+
+        $transactionsByTerminal[$terminalId][] = $transaction;
+    } else {
+        $orphanTransactions[] = $transaction;
+    }
+}
+
+foreach ($transactionsByTerminal as $terminalId => $logs) {
+    usort(
+        $logs,
+        static function (array $a, array $b): int {
+            $timeA = (string) ($a['created_at'] ?? '');
+            $timeB = (string) ($b['created_at'] ?? '');
+
+            return strcmp($timeB, $timeA);
+        }
+    );
+
+    $transactionsByTerminal[$terminalId] = $logs;
+}
+
+usort(
+    $orphanTransactions,
+    static function (array $a, array $b): int {
+        $timeA = (string) ($a['created_at'] ?? '');
+        $timeB = (string) ($b['created_at'] ?? '');
+
+        return strcmp($timeB, $timeA);
+    }
+);
+
+$hasTransactions = $transactionsByTerminal !== [] || $orphanTransactions !== [];
+$transactionGroups = [];
+
+foreach ($terminals as $terminal) {
+    $terminalId = $terminal['id'] ?? null;
+
+    if ($terminalId === null) {
+        continue;
+    }
+
+    $logs = $transactionsByTerminal[$terminalId] ?? [];
+
+    if ($logs === []) {
+        continue;
+    }
+
+    $transactionGroups[] = [
+        'title' => (string) ($terminal['label'] ?? 'Terminal'),
+        'subtitle' => isset($terminal['reader_id']) ? (string) $terminal['reader_id'] : '',
+        'logs' => $logs,
+    ];
+}
+
+if ($orphanTransactions !== []) {
+    $transactionGroups[] = [
+        'title' => 'Ohne zugeordnetes Terminal',
+        'subtitle' => '',
+        'logs' => $orphanTransactions,
+    ];
+}
+
+/**
+ * @param mixed $value
+ */
+function h($value): string
+{
+    return htmlspecialchars((string) $value, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+}
+
+/**
+ * @param mixed $value
+ */
+function formatTimestamp($value): string
+{
+    if (!is_string($value)) {
+        return (string) $value;
+    }
+
+    $time = strtotime($value);
+
+    if ($time === false) {
+        return $value;
+    }
+
+    return date('d.m.Y H:i:s', $time);
+}
+
+/**
+ * @param mixed $value
+ */
+function prettyJson($value): string
+{
+    $encoded = json_encode($value, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+
+    if ($encoded === false) {
+        return '';
+    }
+
+    return $encoded;
+}
+
+$checkoutHighlights = [];
+$highlightedLabels = [];
+
+$appendHighlight = static function (string $label, string $value) use (&$checkoutHighlights, &$highlightedLabels): void {
+    $normalized = trim($value);
+
+    if ($normalized === '') {
+        return;
+    }
+
+    if (isset($highlightedLabels[$label])) {
+        return;
+    }
+
+    $checkoutHighlights[] = [
+        'label' => $label,
+        'value' => $normalized,
+    ];
+    $highlightedLabels[$label] = true;
+};
+
+if ($latestTransactionRecord !== null) {
+    if (isset($latestTransactionRecord['terminal_label'])) {
+        $appendHighlight('Terminal', (string) $latestTransactionRecord['terminal_label']);
+    }
+
+    if (isset($latestTransactionRecord['request']) && is_array($latestTransactionRecord['request'])) {
+        $requestData = $latestTransactionRecord['request'];
+
+        if (isset($requestData['total_amount']) && is_array($requestData['total_amount'])) {
+            $amountInfo = $requestData['total_amount'];
+            $amountLabel = isset($amountInfo['formatted']) ? (string) $amountInfo['formatted'] : '';
+            $amountCurrency = isset($amountInfo['currency']) ? (string) $amountInfo['currency'] : '';
+
+            if ($amountLabel !== '' || $amountCurrency !== '') {
+                $appendHighlight('Betrag', trim($amountLabel . ' ' . $amountCurrency));
+            }
+        }
+
+        if (isset($requestData['description']) && $requestData['description'] !== null) {
+            $appendHighlight('Beschreibung', (string) $requestData['description']);
+        }
+
+        if (isset($requestData['return_url']) && $requestData['return_url'] !== null) {
+            $appendHighlight('Return-URL', (string) $requestData['return_url']);
+        }
+    }
+
+    if (!empty($latestTransactionRecord['status_label'])) {
+        $appendHighlight('Status', (string) $latestTransactionRecord['status_label']);
+    } elseif (isset($latestTransactionRecord['success'])) {
+        $appendHighlight('Status', $latestTransactionRecord['success'] ? 'SUCCESSFUL' : 'FEHLGESCHLAGEN');
+    }
+
+    if (!empty($latestTransactionRecord['error_message'])) {
+        $appendHighlight('Fehlermeldung', (string) $latestTransactionRecord['error_message']);
+    }
+}
+
+if ($transactionMeta !== null) {
+    $appendHighlight('Foreign Transaction ID', (string) $transactionMeta['foreign_transaction_id']);
+
+    if (!empty($transactionMeta['client_transaction_id'])) {
+        $appendHighlight('Client Transaction ID', (string) $transactionMeta['client_transaction_id']);
+    }
+}
+
+if (is_array($checkoutResult['body'] ?? null)) {
+    $body = $checkoutResult['body'];
+
+    $bodyFields = [
+        'transaction_code' => 'Transaction Code',
+        'transaction_id' => 'Transaction ID',
+        'checkout_reference' => 'Checkout Reference',
+        'id' => 'Checkout ID',
+    ];
+
+    foreach ($bodyFields as $key => $label) {
+        if (isset($body[$key]) && (is_string($body[$key]) || is_numeric($body[$key]))) {
+            $appendHighlight($label, (string) $body[$key]);
+        }
+    }
+
+    if (isset($body['amount']) && is_array($body['amount'])) {
+        $amount = $body['amount'];
+
+        if (isset($amount['value'], $amount['currency'])) {
+            $minor = isset($amount['minor_unit']) && is_numeric($amount['minor_unit'])
+                ? (int) $amount['minor_unit']
+                : null;
+            $value = (string) $amount['value'];
+
+            if ($minor !== null) {
+                $scale = $minor > 0 ? 10 ** $minor : 1;
+                $value = number_format(((int) $amount['value']) / $scale, $minor, ',', '.');
+            }
+
+            $appendHighlight('Betrag (Antwort)', trim($value . ' ' . (string) $amount['currency']));
+        }
+    }
+}
+
+if ($terminalStorageError !== null && !in_array($terminalStorageError, $errors, true)) {
+    $errors[] = $terminalStorageError;
+}
+
+if ($transactionStorageError !== null && !in_array($transactionStorageError, $errors, true)) {
+    $errors[] = $transactionStorageError;
+}
+
+header('Content-Type: text/html; charset=UTF-8');
+
+$terminalReturnUrls = [];
+foreach ($terminals as $terminal) {
+    $terminalReturnUrls[$terminal['id']] = $terminal['default_return_url'] ?? '';
+}
+$scriptName = $_SERVER['PHP_SELF'] ?? '';
+$baseUrl = $scriptName !== '' ? $scriptName : 'index.php';
+
 ?>
 <!DOCTYPE html>
 <html lang="de">
 <head>
     <meta charset="utf-8">
-    <title>SumUp Terminal Zahlung</title>
     <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>SumUp Terminal Checkout</title>
     <style>
         :root {
             color-scheme: light dark;
             font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+            line-height: 1.6;
         }
 
         body {
             margin: 0;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            min-height: 100vh;
-            background: #f6f8fb;
+            background: #0f172a;
+            color: #e2e8f0;
+            padding: 2rem 1rem 4rem;
+        }
+
+        h1, h2 {
+            margin-top: 0;
+        }
+
+        a {
+            color: #38bdf8;
         }
 
         .container {
-            background: #fff;
-            padding: 2rem;
-            border-radius: 1rem;
-            box-shadow: 0 1.5rem 3rem rgba(15, 23, 42, 0.15);
-            max-width: 32rem;
-            width: 90%;
+            max-width: 1100px;
+            margin: 0 auto;
         }
 
-        h1 {
-            margin-top: 0;
-            margin-bottom: 1.5rem;
-            font-size: 1.75rem;
-            color: #111827;
-        }
-
-        form {
-            display: grid;
+        nav.top-nav {
+            display: flex;
+            justify-content: center;
             gap: 1rem;
+            margin: 0 auto 2rem;
+            flex-wrap: wrap;
+            background: rgba(15, 23, 42, 0.85);
+            border: 1px solid rgba(148, 163, 184, 0.25);
+            border-radius: 999px;
+            padding: 0.6rem 1.4rem;
+            backdrop-filter: blur(8px);
+        }
+
+        nav.top-nav a {
+            text-decoration: none;
+            color: #e2e8f0;
+            font-weight: 600;
+            padding: 0.35rem 1rem;
+            border-radius: 999px;
+            transition: background 0.2s ease, color 0.2s ease;
+        }
+
+        nav.top-nav a.active {
+            background: rgba(56, 189, 248, 0.35);
+            color: #0b1120;
+        }
+
+        nav.top-nav a:hover,
+        nav.top-nav a:focus {
+            background: rgba(56, 189, 248, 0.18);
+            color: #f8fafc;
+        }
+
+        .grid {
+            display: grid;
+            gap: 1.5rem;
+        }
+
+        .view {
+            display: none;
+        }
+
+        .view.active {
+            display: block;
+        }
+
+        .view-stack {
+            display: grid;
+            gap: 2rem;
+        }
+
+        @media (min-width: 900px) {
+            .grid-two {
+                grid-template-columns: 1fr 1fr;
+            }
+        }
+
+        .card {
+            background: #111c33;
+            border-radius: 1rem;
+            padding: 1.75rem;
+            box-shadow: 0 1.5rem 3rem rgba(15, 23, 42, 0.35);
         }
 
         label {
-            display: flex;
-            flex-direction: column;
+            display: block;
             font-weight: 600;
-            color: #374151;
+            margin-bottom: 0.35rem;
         }
 
-        input,
-        select,
-        textarea {
-            margin-top: 0.35rem;
-            padding: 0.75rem 1rem;
-            border-radius: 0.75rem;
-            border: 1px solid #d1d5db;
-            font-size: 1rem;
+        input, select, textarea, button {
+            width: 100%;
+            padding: 0.6rem 0.75rem;
+            border-radius: 0.6rem;
+            border: 1px solid rgba(148, 163, 184, 0.35);
+            background: rgba(15, 23, 42, 0.75);
+            color: inherit;
+            font: inherit;
         }
 
         textarea {
-            min-height: 4rem;
-            resize: vertical;
+            min-height: 5.5rem;
         }
 
         button {
-            background: #2563eb;
-            color: #fff;
-            border: none;
-            border-radius: 999px;
-            padding: 0.85rem 1.5rem;
-            font-size: 1rem;
-            font-weight: 600;
             cursor: pointer;
-            transition: background 0.2s ease-in-out;
+            background: linear-gradient(135deg, #0ea5e9, #38bdf8);
+            color: #0b1120;
+            font-weight: 700;
+            border: none;
+            transition: transform 0.12s ease, box-shadow 0.12s ease;
         }
 
-        button:hover,
-        button:focus {
-            background: #1d4ed8;
+        button:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 12px 24px rgba(14, 165, 233, 0.3);
         }
 
-        button:disabled {
-            opacity: 0.6;
-            cursor: not-allowed;
+        .actions {
+            display: flex;
+            gap: 1rem;
         }
 
-        form.secondary-form {
-            display: block;
-            margin-bottom: 1.5rem;
+        .actions button[type="submit"] {
+            flex: 1 1 auto;
         }
 
-        .secondary-button {
-            background: transparent;
-            color: #2563eb;
-            border: 2px solid #2563eb;
+        .message {
+            border-radius: 0.8rem;
+            padding: 1rem 1.2rem;
+            margin-bottom: 1.2rem;
         }
 
-        .secondary-button:hover,
-        .secondary-button:focus {
-            background: #2563eb;
-            color: #fff;
+        .message.error {
+            background: rgba(239, 68, 68, 0.18);
+            border: 1px solid rgba(248, 113, 113, 0.4);
         }
 
-        .secondary-button:disabled {
-            background: transparent;
-            color: rgba(37, 99, 235, 0.6);
-            border-color: rgba(37, 99, 235, 0.4);
+        .message.success {
+            background: rgba(34, 197, 94, 0.2);
+            border: 1px solid rgba(74, 222, 128, 0.45);
         }
 
-        .alert {
-            border-radius: 0.75rem;
-            padding: 1rem 1.25rem;
-            margin-bottom: 1rem;
-        }
-
-        .alert.error {
-            background: #fee2e2;
-            color: #991b1b;
-            border: 1px solid #fecaca;
-        }
-
-        .alert.success {
-            background: #dcfce7;
-            color: #166534;
-            border: 1px solid #bbf7d0;
-        }
-
-        .alert.info {
-            background: #bfdbfe;
-            color: #1e3a8a;
-            border: 1px solid #93c5fd;
-        }
-
-        .alert.warning {
-            background: #fef3c7;
-            color: #92400e;
-            border: 1px solid #fde68a;
-        }
-
-        .terminal-list {
-            list-style: none;
-            margin: 0.5rem 0 0;
-            padding: 0;
-        }
-
-        .terminal-list li {
-            padding: 0.5rem 0;
-            border-top: 1px solid #e5e7eb;
-        }
-
-        .terminal-list li:first-child {
-            border-top: none;
-        }
-
-        .terminal-list strong {
-            display: block;
-            font-size: 1rem;
-            color: #1f2937;
-        }
-
-        .terminal-list span {
-            display: block;
+        code {
+            font-family: ui-monospace, SFMono-Regular, SFMono, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
             font-size: 0.9rem;
-            color: #6b7280;
+            background: rgba(15, 23, 42, 0.65);
+            padding: 0.1rem 0.4rem;
+            border-radius: 0.35rem;
         }
 
-        pre {
-            background: #0f172a;
-            color: #e2e8f0;
+        .highlights {
+            display: grid;
+            gap: 0.6rem;
+            margin: 1rem 0;
+        }
+
+        .highlight-row {
+            display: grid;
+            gap: 0.3rem;
+        }
+
+        .highlight-row dt {
+            font-weight: 600;
+            color: #cbd5f5;
+        }
+
+        .highlight-row dd {
+            margin: 0;
+        }
+
+        .status-card {
+            margin-top: 2rem;
+        }
+
+        .status-card .status-pill {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.4rem;
+            padding: 0.25rem 0.7rem;
+            border-radius: 999px;
+            background: rgba(56, 189, 248, 0.18);
+            border: 1px solid rgba(56, 189, 248, 0.35);
+            font-weight: 600;
+        }
+
+        .status-card .status-pill.error {
+            background: rgba(248, 113, 113, 0.2);
+            border-color: rgba(248, 113, 113, 0.4);
+        }
+
+        .status-card .status-pill.success {
+            background: rgba(74, 222, 128, 0.25);
+            border-color: rgba(74, 222, 128, 0.4);
+        }
+
+        .status-card pre {
+            margin-top: 1rem;
+            background: rgba(15, 23, 42, 0.8);
             padding: 1rem;
             border-radius: 0.75rem;
             overflow-x: auto;
-            font-size: 0.85rem;
         }
 
-        @media (prefers-color-scheme: dark) {
-            body {
-                background: #0f172a;
-            }
+        .status-card .status-actions {
+            display: flex;
+            gap: 0.75rem;
+            margin-top: 1rem;
+        }
 
-            .container {
-                background: #111827;
-                color: #f9fafb;
-                box-shadow: none;
-                border: 1px solid #1f2937;
-            }
+        .hidden {
+            display: none !important;
+        }
 
-            h1 {
-                color: #f3f4f6;
-            }
+        .transaction-log {
+            margin-bottom: 1.5rem;
+        }
 
-            label {
-                color: #d1d5db;
-            }
+        .transaction-log summary {
+            cursor: pointer;
+            font-weight: 600;
+            padding: 0.75rem 1rem;
+            border-radius: 0.75rem;
+            background: rgba(15, 23, 42, 0.7);
+            border: 1px solid rgba(148, 163, 184, 0.25);
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.5rem;
+            align-items: baseline;
+        }
 
-            input,
-            select,
-            textarea {
-                background: #1f2937;
-                color: #f9fafb;
-                border: 1px solid #374151;
-            }
+        .transaction-log[open] summary {
+            background: rgba(30, 41, 59, 0.9);
+        }
 
-            .secondary-button {
-                color: #93c5fd;
-                border-color: #60a5fa;
-            }
+        .transaction-entry {
+            margin-top: 1rem;
+            padding: 1rem;
+            border-radius: 0.75rem;
+            background: rgba(15, 23, 42, 0.55);
+            border: 1px solid rgba(148, 163, 184, 0.18);
+        }
 
-            .secondary-button:hover,
-            .secondary-button:focus {
-                color: #0f172a;
-                background: #60a5fa;
-            }
+        .transaction-entry h4 {
+            margin-top: 1.25rem;
+            margin-bottom: 0.6rem;
+        }
 
-            .secondary-button:disabled {
-                color: rgba(147, 197, 253, 0.5);
-                border-color: rgba(96, 165, 250, 0.4);
-            }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
 
-            .alert.success {
-                background: rgba(22, 101, 52, 0.2);
-                border-color: rgba(22, 101, 52, 0.4);
-            }
+        th, td {
+            padding: 0.6rem 0.75rem;
+            border-bottom: 1px solid rgba(148, 163, 184, 0.25);
+            text-align: left;
+        }
 
-            .alert.info {
-                background: rgba(30, 64, 175, 0.2);
-                border-color: rgba(30, 64, 175, 0.4);
-                color: #bfdbfe;
-            }
+        th {
+            font-weight: 700;
+            color: #cbd5f5;
+        }
 
-            .alert.warning {
-                background: rgba(217, 119, 6, 0.2);
-                border-color: rgba(217, 119, 6, 0.4);
-                color: #fef3c7;
-            }
+        .response-block {
+            margin-top: 1.5rem;
+            font-size: 0.95rem;
+        }
 
-            .alert.error {
-                background: rgba(153, 27, 27, 0.2);
-                border-color: rgba(153, 27, 27, 0.4);
-            }
+        pre {
+            background: rgba(15, 23, 42, 0.75);
+            border-radius: 0.8rem;
+            padding: 1rem;
+            overflow: auto;
+        }
 
-            .terminal-list li {
-                border-top-color: #374151;
-            }
+        .muted {
+            color: #94a3b8;
+            font-size: 0.9rem;
+        }
 
-            .terminal-list strong {
-                color: #f9fafb;
-            }
+        .inline-form {
+            display: inline;
+        }
 
-            .terminal-list span {
-                color: #9ca3af;
-            }
+        .secondary-button {
+            background: rgba(148, 163, 184, 0.2);
+            color: inherit;
+            border: 1px solid rgba(148, 163, 184, 0.45);
+        }
 
-            pre {
-                background: #1e293b;
-                color: #e2e8f0;
-            }
+        .secondary-button:hover {
+            box-shadow: none;
+            transform: none;
+            background: rgba(148, 163, 184, 0.3);
         }
     </style>
 </head>
 <body>
-    <div class="container">
-        <h1>SumUp Zahlung starten</h1>
+<nav class="top-nav">
+    <a href="<?= h($baseUrl) ?>?view=home" class="<?= $activeView === 'home' ? 'active' : '' ?>">Home</a>
+    <a href="<?= h($baseUrl) ?>?view=terminals" class="<?= $activeView === 'terminals' ? 'active' : '' ?>">Terminals</a>
+    <a href="<?= h($baseUrl) ?>?view=settings" class="<?= $activeView === 'settings' ? 'active' : '' ?>">Einstellungen</a>
+</nav>
+<div class="container">
+    <header style="margin-bottom: 2rem;">
+        <h1>SumUp Terminal Checkout</h1>
+        <p class="muted">Speichere deine Terminals und schicke Zahlungsanforderungen an die SumUp-API – ganz ohne SSH oder cURL.</p>
+    </header>
 
-        <?php if ($authMethod === 'api_key'): ?>
-            <?php if ($secureStoreError !== null): ?>
-                <div class="alert error">
-                    <strong>Sichere Ablage deaktiviert:</strong>
-                    <div><?= htmlspecialchars($secureStoreError, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') ?></div>
-                </div>
-            <?php elseif ($credentialStore instanceof CredentialStore && $storedCredentialDetails !== null): ?>
-                <div class="alert info">
-                    <strong>API-Key geladen</strong>
-                    <p>
-                        Der hinterlegte Schlüssel<?= $storedCredentialDetails['merchant_id'] !== ''
-                            ? ' für ' . htmlspecialchars($storedCredentialDetails['merchant_id'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8')
-                            : '' ?> wurde automatisch verwendet.
-                        <?php if (isset($storedCredentialDetails['updated_at']) && $storedCredentialDetails['updated_at'] !== ''): ?>
-                            <br>
-                            Zuletzt aktualisiert: <?= htmlspecialchars($storedCredentialDetails['updated_at'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') ?>
-                        <?php endif; ?>
-                    </p>
-                </div>
-            <?php elseif ($credentialStore instanceof CredentialStore): ?>
-                <div class="alert info">
-                    <strong>API-Key hinterlegen</strong>
-                    <p>
-                        Besuchen Sie <a href="anmeldung.php">anmeldung.php</a>, um Ihren SumUp API-Key sicher zu speichern.
-                    </p>
-                </div>
-            <?php endif; ?>
-        <?php endif; ?>
-        <div class="alert info">
-            <strong>Terminal koppeln:</strong>
-            <p>
-                Dein Terminal zeigt nur dann im Dropdown, wenn es zuvor mit der SumUp-Cloud verknüpft wurde.
-                Nutze dafür <a href="terminal-verknuepfung.php">terminal-verknuepfung.php</a> und folge der Schritt-für-Schritt-Anleitung.
-            </p>
+    <?php if ($errors !== []): ?>
+        <div class="message error">
+            <strong>Es sind Fehler aufgetreten:</strong>
+            <ul>
+                <?php foreach ($errors as $error): ?>
+                    <li><?= h($error) ?></li>
+                <?php endforeach; ?>
+            </ul>
         </div>
-        <?php foreach ($configurationWarnings as $configurationWarning): ?>
-            <div class="alert warning">
-                <strong>Konfiguration:</strong>
-                <div><?= htmlspecialchars($configurationWarning, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') ?></div>
-            </div>
-        <?php endforeach; ?>
+    <?php endif; ?>
 
-        <?php foreach ($terminalWarnings as $terminalWarning): ?>
-            <div class="alert warning">
-                <strong>Konfiguration:</strong>
-                <div><?= htmlspecialchars($terminalWarning, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') ?></div>
-            </div>
-        <?php endforeach; ?>
+    <?php if ($successMessage !== null && $errors === []): ?>
+        <div class="message success">
+            <?= h($successMessage) ?>
+        </div>
+    <?php endif; ?>
 
-        <?php if ($credentialError !== null): ?>
-            <div class="alert error">
-                <strong>Zugriffsdaten fehlen:</strong>
-                <div><?= htmlspecialchars($credentialError, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') ?></div>
-            </div>
-        <?php endif; ?>
+    <section class="view<?= $activeView === 'home' ? ' active' : '' ?>" data-view="home">
+        <div class="view-stack">
+            <section class="card" id="checkout">
+                <h2>Zahlung an Terminal senden</h2>
+                <?php if ($terminals === []): ?>
+                    <p class="muted">Bitte speichere zunächst mindestens ein Terminal, um Zahlungen zu verschicken.</p>
+                <?php else: ?>
+                    <form method="post" autocomplete="off">
+                        <input type="hidden" name="action" value="send_payment">
+                        <input type="hidden" name="current_view" value="home">
 
-        <?php foreach ($environmentErrors as $envError): ?>
-            <div class="alert error">
-                <strong>Systemvoraussetzung:</strong>
-                <div><?= htmlspecialchars($envError, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') ?></div>
-            </div>
-        <?php endforeach; ?>
+                        <label for="payment-terminal">Terminal</label>
+                        <select id="payment-terminal" name="terminal_id" required>
+                            <?php foreach ($terminals as $terminal): ?>
+                                <option value="<?= h($terminal['id']) ?>" <?= $paymentForm['terminal_id'] === $terminal['id'] ? 'selected' : '' ?>>
+                                    <?= h($terminal['label'] . ' – ' . $terminal['reader_id']) ?>
+                                </option>
+                            <?php endforeach; ?>
+                        </select>
 
-        <form method="post" class="secondary-form">
-            <input type="hidden" name="action" value="discover_terminals">
-            <button type="submit" class="secondary-button"<?= $environmentErrors !== [] ? ' disabled' : '' ?>>Terminals aus SumUp laden</button>
-        </form>
+                        <label for="amount">Betrag (z. B. 50,33)</label>
+                        <input id="amount" name="amount" required value="<?= h($paymentForm['amount']) ?>">
 
-        <?php if ($terminalDiscoveryError !== null): ?>
-            <div class="alert error">
-                <strong>Terminal-Abruf:</strong>
-                <div><?= htmlspecialchars($terminalDiscoveryError, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') ?></div>
-            </div>
-        <?php elseif ($terminalDiscoveryResult !== null): ?>
-            <div class="alert info">
-                <strong><?= htmlspecialchars($terminalDiscoveryResult['title'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') ?></strong>
-                <p><?= htmlspecialchars($terminalDiscoveryResult['message'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') ?></p>
-                <?php if (!empty($terminalDiscoveryResult['items'])): ?>
-                    <ul class="terminal-list">
-                        <?php foreach ($terminalDiscoveryResult['items'] as $terminal): ?>
-                            <li>
-                                <strong><?= htmlspecialchars($terminal['label'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') ?></strong>
-                                <span>Seriennummer: <?= htmlspecialchars($terminal['serial'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') ?></span>
-                                <?php if (($terminal['model'] ?? '') !== ''): ?>
-                                    <span>Modell: <?= htmlspecialchars((string) $terminal['model'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') ?></span>
-                                <?php endif; ?>
-                                <?php if (($terminal['status'] ?? '') !== ''): ?>
-                                    <span>Status: <?= htmlspecialchars((string) $terminal['status'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') ?></span>
-                                <?php endif; ?>
-                            </li>
-                        <?php endforeach; ?>
-                    </ul>
+                        <div class="grid grid-two" style="margin-top: 1rem;">
+                            <div>
+                                <label for="currency">Währung</label>
+                                <input id="currency" name="currency" required value="<?= h($paymentForm['currency']) ?>">
+                            </div>
+                            <div>
+                                <label for="minor_unit">Nachkommastellen</label>
+                                <input id="minor_unit" name="minor_unit" required value="<?= h($paymentForm['minor_unit']) ?>">
+                            </div>
+                        </div>
+
+                        <label for="description" style="margin-top: 1rem;">Beschreibung (optional)</label>
+                        <input id="description" name="description" value="<?= h($paymentForm['description']) ?>">
+
+                        <label for="return_url" style="margin-top: 1rem;">Return-URL (optional)</label>
+                        <input id="return_url" name="return_url" value="<?= h($paymentForm['return_url']) ?>" placeholder="https://deine-app.de/webhook">
+
+                        <label for="foreign_transaction_id" style="margin-top: 1rem;">Foreign Transaction ID</label>
+                        <input id="foreign_transaction_id" name="foreign_transaction_id" value="<?= h($paymentForm['foreign_transaction_id']) ?>" required>
+                        <p class="muted" style="margin-top: 0.25rem;">Pflichtfeld. Wird kein Wert angegeben, erzeugt die Anwendung automatisch eine eindeutige ID.</p>
+
+                        <label for="tip_rates" style="margin-top: 1rem;">Trinkgeldsätze (optional)</label>
+                        <input id="tip_rates" name="tip_rates" value="<?= h($paymentForm['tip_rates']) ?>" placeholder="Beispiel: 5,10,15">
+                        <p class="muted" style="margin-top: 0.25rem;">Mehrere Sätze kommasepariert eingeben. Werte > 1 werden als Prozent interpretiert.</p>
+
+                        <label for="tip_timeout" style="margin-top: 1rem;">Trinkgeld-Timeout in Sekunden (optional)</label>
+                        <input id="tip_timeout" name="tip_timeout" value="<?= h($paymentForm['tip_timeout']) ?>" placeholder="60">
+
+                        <div class="actions" style="margin-top: 1.5rem;">
+                            <button type="submit">Zahlung senden</button>
+                        </div>
+                    </form>
                 <?php endif; ?>
-            </div>
-        <?php endif; ?>
 
-        <?php if (!empty($terminalDiscoveryHints)): ?>
-            <div class="alert info">
-                <strong>Hinweis:</strong>
-                <ul>
-                    <?php foreach ($terminalDiscoveryHints as $hint): ?>
-                        <li><?= htmlspecialchars($hint, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') ?></li>
+                <?php if ($checkoutResult !== null): ?>
+                    <div class="response-block">
+                        <h3>Antwort von SumUp</h3>
+                        <p>Statuscode: <strong><?= h((string) $checkoutResult['status']) ?></strong></p>
+                        <?php if ($checkoutHighlights !== []): ?>
+                            <dl class="highlights">
+                                <?php foreach ($checkoutHighlights as $highlight): ?>
+                                    <div class="highlight-row">
+                                        <dt><?= h($highlight['label']) ?></dt>
+                                        <dd><?= h($highlight['value']) ?></dd>
+                                    </div>
+                                <?php endforeach; ?>
+                            </dl>
+                        <?php endif; ?>
+                        <?php if ($checkoutResult['body'] !== null): ?>
+                            <?php $prettyCheckout = prettyJson($checkoutResult['body']); ?>
+                            <pre><?= h($prettyCheckout !== '' ? $prettyCheckout : '{}') ?></pre>
+                        <?php else: ?>
+                            <pre><?= h($checkoutResult['raw']) ?></pre>
+                        <?php endif; ?>
+                    </div>
+                <?php endif; ?>
+            </section>
+        </div>
+    </section>
+
+    <section class="view<?= $activeView === 'terminals' ? ' active' : '' ?>" data-view="terminals">
+        <div class="view-stack">
+            <section class="card" id="terminals">
+                <h2>Gespeicherte Terminals</h2>
+                <?php if ($terminals === []): ?>
+                    <p class="muted">Noch keine Terminals hinterlegt. Lege unter „Einstellungen“ ein neues Gerät an.</p>
+                <?php else: ?>
+                    <div style="overflow-x: auto;">
+                        <table>
+                            <thead>
+                            <tr>
+                                <th>Bezeichnung</th>
+                                <th>Reader ID</th>
+                                <th>Merchant Code</th>
+                                <th>Return-URL</th>
+                                <th>Aktionen</th>
+                            </tr>
+                            </thead>
+                            <tbody>
+                            <?php foreach ($terminals as $terminal): ?>
+                                <tr>
+                                    <td><?= h($terminal['label']) ?></td>
+                                    <td><code><?= h($terminal['reader_id']) ?></code></td>
+                                    <td><code><?= h($terminal['merchant_code']) ?></code></td>
+                                    <td>
+                                        <?php if ($terminal['default_return_url'] !== ''): ?>
+                                            <a href="<?= h($terminal['default_return_url']) ?>" target="_blank" rel="noopener noreferrer">Link öffnen</a>
+                                        <?php else: ?>
+                                            <span class="muted">Nicht gesetzt</span>
+                                        <?php endif; ?>
+                                    </td>
+                                    <td>
+                                        <form class="inline-form" method="post" onsubmit="return confirm('Terminal wirklich löschen?');">
+                                            <input type="hidden" name="action" value="delete_terminal">
+                                            <input type="hidden" name="current_view" value="terminals">
+                                            <input type="hidden" name="terminal_id" value="<?= h($terminal['id']) ?>">
+                                            <button type="submit" class="secondary-button">Entfernen</button>
+                                        </form>
+                                    </td>
+                                </tr>
+                            <?php endforeach; ?>
+                            </tbody>
+                        </table>
+                    </div>
+                <?php endif; ?>
+            </section>
+
+            <section class="card">
+                <h2>Gespeicherte Zahlungsrückmeldungen</h2>
+                <?php if (!$hasTransactions): ?>
+                    <p class="muted">Es wurden noch keine Rückmeldungen gespeichert.</p>
+                <?php else: ?>
+                    <?php foreach ($transactionGroups as $group): ?>
+                        <?php $logs = $group['logs']; ?>
+                        <details class="transaction-log">
+                            <summary>
+                                <?= h($group['title']) ?>
+                                <?php if ($group['subtitle'] !== ''): ?>
+                                    <span class="muted">– <?= h($group['subtitle']) ?></span>
+                                <?php endif; ?>
+                                <span class="muted">(<?= count($logs) === 1 ? '1 Rückmeldung' : count($logs) . ' Rückmeldungen' ?>)</span>
+                            </summary>
+                            <?php foreach ($logs as $log): ?>
+                                <?php
+                                    $summaryParts = [];
+                                    $summaryParts[] = formatTimestamp($log['created_at'] ?? '');
+
+                                    $requestAmount = '';
+                                    if (isset($log['request']) && is_array($log['request']) && isset($log['request']['total_amount']) && is_array($log['request']['total_amount'])) {
+                                        $info = $log['request']['total_amount'];
+                                        $amountLabel = isset($info['formatted']) ? (string) $info['formatted'] : '';
+                                        $amountCurrency = isset($info['currency']) ? (string) $info['currency'] : '';
+
+                                        if ($amountLabel !== '' || $amountCurrency !== '') {
+                                            $requestAmount = trim($amountLabel . ' ' . $amountCurrency);
+                                        }
+                                    }
+
+                                    if ($requestAmount !== '') {
+                                        $summaryParts[] = $requestAmount;
+                                    }
+
+                                    $statusSummary = '';
+                                    if (!empty($log['status_label'])) {
+                                        $statusSummary = (string) $log['status_label'];
+                                    } elseif (isset($log['success'])) {
+                                        $statusSummary = $log['success'] ? 'SUCCESSFUL' : 'FEHLGESCHLAGEN';
+                                    }
+
+                                    if ($statusSummary !== '') {
+                                        $summaryParts[] = 'Status: ' . $statusSummary;
+                                    }
+
+                                    if (isset($log['status_code'])) {
+                                        $summaryParts[] = 'HTTP ' . (string) $log['status_code'];
+                                    }
+
+                                    $summaryText = implode(' • ', array_filter($summaryParts, 'strlen'));
+                                    $terminalLabel = isset($log['terminal_label']) ? (string) $log['terminal_label'] : '';
+                                ?>
+                                <div class="transaction-entry">
+                                    <p class="muted" style="margin-top: 0;"><?= h($summaryText) ?></p>
+                                    <dl class="highlights">
+                                        <div class="highlight-row">
+                                            <dt>Zeitpunkt</dt>
+                                            <dd><?= h(formatTimestamp($log['created_at'] ?? '')) ?></dd>
+                                        </div>
+                                        <?php if ($terminalLabel !== ''): ?>
+                                            <div class="highlight-row">
+                                                <dt>Terminal</dt>
+                                                <dd><?= h($terminalLabel) ?></dd>
+                                            </div>
+                                        <?php endif; ?>
+                                        <div class="highlight-row">
+                                            <dt>Foreign Transaction ID</dt>
+                                            <dd><code><?= h((string) ($log['foreign_transaction_id'] ?? '')) ?></code></dd>
+                                        </div>
+                                        <?php if (!empty($log['client_transaction_id'])): ?>
+                                            <div class="highlight-row">
+                                                <dt>Client Transaction ID</dt>
+                                                <dd><code><?= h((string) $log['client_transaction_id']) ?></code></dd>
+                                            </div>
+                                        <?php endif; ?>
+                                        <?php if ($statusSummary !== ''): ?>
+                                            <div class="highlight-row">
+                                                <dt>Status</dt>
+                                                <dd><?= h($statusSummary) ?></dd>
+                                            </div>
+                                        <?php endif; ?>
+                                        <?php if (isset($log['status_code'])): ?>
+                                            <div class="highlight-row">
+                                                <dt>HTTP-Status</dt>
+                                                <dd><?= h((string) $log['status_code']) ?></dd>
+                                            </div>
+                                        <?php endif; ?>
+                                        <?php if ($requestAmount !== ''): ?>
+                                            <div class="highlight-row">
+                                                <dt>Betrag</dt>
+                                                <dd><?= h($requestAmount) ?></dd>
+                                            </div>
+                                        <?php endif; ?>
+                                        <?php if (!empty($log['error_message'])): ?>
+                                            <div class="highlight-row">
+                                                <dt>Fehler</dt>
+                                                <dd><?= h((string) $log['error_message']) ?></dd>
+                                            </div>
+                                        <?php endif; ?>
+                                    </dl>
+                                    <?php $responseBody = $log['response_body'] ?? null; ?>
+                                    <?php if (is_array($responseBody) || is_object($responseBody)): ?>
+                                        <h4>Antwort (JSON)</h4>
+                                        <?php $prettyResponse = prettyJson($responseBody); ?>
+                                        <pre><?= h($prettyResponse !== '' ? $prettyResponse : '{}') ?></pre>
+                                    <?php elseif (!empty($log['response_raw'])): ?>
+                                        <h4>Antwort (Rohdaten)</h4>
+                                        <pre><?= h((string) $log['response_raw']) ?></pre>
+                                    <?php endif; ?>
+                                    <?php if (isset($log['request'])): ?>
+                                        <h4>Gesendete Daten</h4>
+                                        <?php $prettyRequest = prettyJson($log['request']); ?>
+                                        <pre><?= h($prettyRequest !== '' ? $prettyRequest : '{}') ?></pre>
+                                    <?php endif; ?>
+                                </div>
+                            <?php endforeach; ?>
+                        </details>
                     <?php endforeach; ?>
-                </ul>
-            </div>
-        <?php endif; ?>
+                <?php endif; ?>
+            </section>
+        </div>
+    </section>
 
-        <?php if ($terminalDiscoveryDebug !== null): ?>
-            <details>
-                <summary>API-Antwort (Terminal-Abruf)</summary>
-                <pre><?= htmlspecialchars(json_encode($terminalDiscoveryDebug, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE), ENT_NOQUOTES | ENT_SUBSTITUTE, 'UTF-8') ?></pre>
-            </details>
-        <?php endif; ?>
+    <section class="view<?= $activeView === 'settings' ? ' active' : '' ?>" data-view="settings">
+        <div class="grid grid-two">
+            <section class="card">
+                <h2>Neues Terminal speichern</h2>
+                <form method="post" autocomplete="off">
+                    <input type="hidden" name="action" value="add_terminal">
+                    <input type="hidden" name="current_view" value="settings">
 
-        <?php if ($error !== null): ?>
-            <div class="alert error">
-                <strong>Fehler:</strong>
-                <div><?= htmlspecialchars($error, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') ?></div>
-            </div>
-        <?php elseif ($result !== null): ?>
-            <div class="alert success">
-                <strong><?= htmlspecialchars($result['title'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') ?></strong>
-                <p><?= htmlspecialchars($result['message'] ?? '', ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') ?></p>
-            </div>
-        <?php endif; ?>
+                    <label for="label">Bezeichnung</label>
+                    <input id="label" name="label" required value="<?= h($terminalForm['label']) ?>">
 
-        <?php if ($logError !== null): ?>
-            <div class="alert error">
-                <strong>Protokollierung:</strong>
-                <div><?= htmlspecialchars($logError, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') ?></div>
-            </div>
-        <?php endif; ?>
+                    <label for="merchant_code">Merchant Code (z. B. MCRNF79M)</label>
+                    <input id="merchant_code" name="merchant_code" required value="<?= h($terminalForm['merchant_code']) ?>">
 
-        <?php if ($result !== null && !empty($result['hints'])): ?>
-            <div class="alert info">
-                <strong>Hinweise zur Fehlersuche:</strong>
-                <ul>
-                    <?php foreach ($result['hints'] as $hint): ?>
-                        <li><?= htmlspecialchars($hint, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') ?></li>
-                    <?php endforeach; ?>
-                </ul>
-            </div>
-        <?php endif; ?>
+                    <label for="reader_id">Reader ID</label>
+                    <input id="reader_id" name="reader_id" required value="<?= h($terminalForm['reader_id']) ?>">
 
-        <form method="post">
-            <input type="hidden" name="action" value="send_payment">
-            <?php if ($terminalOptions === []): ?>
-                <label>
-                    Terminal
-                    <select name="terminal_serial" disabled>
-                        <option>Bitte konfigurieren Sie mindestens ein Terminal</option>
-                    </select>
-                </label>
+                    <label for="app_id">Affiliate App ID</label>
+                    <input id="app_id" name="app_id" required value="<?= h($terminalForm['app_id']) ?>">
+
+                    <label for="affiliate_key">Affiliate Key</label>
+                    <input id="affiliate_key" name="affiliate_key" required value="<?= h($terminalForm['affiliate_key']) ?>">
+
+                    <label for="api_key">SumUp Secret Key (Bearer Token)</label>
+                    <input id="api_key" name="api_key" required value="<?= h($terminalForm['api_key']) ?>">
+
+                    <label for="default_return_url">Standard-Return-URL (optional)</label>
+                    <input id="default_return_url" name="default_return_url" value="<?= h($terminalForm['default_return_url']) ?>" placeholder="https://example.com/webhook">
+
+                    <div class="actions" style="margin-top: 1.5rem;">
+                        <button type="submit">Terminal speichern</button>
+                    </div>
+                </form>
+            </section>
+
+            <section class="card">
+                <h2>Terminals vom SumUp-Konto abrufen</h2>
+                <form method="post" autocomplete="off" style="margin-bottom: 1.5rem;">
+                    <input type="hidden" name="action" value="fetch_readers">
+                    <input type="hidden" name="current_view" value="settings">
+
+                    <label for="lookup-merchant-code">Merchant Code</label>
+                    <input id="lookup-merchant-code" name="merchant_code" required value="<?= h($readerLookupForm['merchant_code']) ?>">
+
+                    <label for="lookup-api-key">SumUp Secret Key (Bearer Token)</label>
+                    <input id="lookup-api-key" name="api_key" required value="<?= h($readerLookupForm['api_key']) ?>">
+
+                    <div class="actions" style="margin-top: 1.5rem;">
+                        <button type="submit">Reader abrufen</button>
+                    </div>
+                </form>
+
+                <?php if (is_array($fetchedReaders)): ?>
+                    <?php if ($fetchedReaders === []): ?>
+                        <p class="muted">Für diesen Merchant wurden keine Terminals zurückgegeben.</p>
+                    <?php else: ?>
+                        <div style="overflow-x: auto;">
+                            <table>
+                                <thead>
+                                <tr>
+                                    <th>Reader ID</th>
+                                    <th>Bezeichnung</th>
+                                    <th>Status</th>
+                                    <th>Modell</th>
+                                    <th>Seriennummer</th>
+                                </tr>
+                                </thead>
+                                <tbody>
+                                <?php foreach ($fetchedReaders as $reader): ?>
+                                    <tr>
+                                        <td><?= h((string) ($reader['id'] ?? ($reader['reader_id'] ?? ''))) ?></td>
+                                        <td><?= h((string) ($reader['label'] ?? ($reader['description'] ?? ''))) ?></td>
+                                        <td><?= h((string) ($reader['status'] ?? '')) ?></td>
+                                        <td><?= h((string) ($reader['type'] ?? ($reader['model'] ?? ''))) ?></td>
+                                        <td><?= h((string) ($reader['serial_number'] ?? ($reader['serial'] ?? ''))) ?></td>
+                                    </tr>
+                                <?php endforeach; ?>
+                                </tbody>
+                            </table>
+                        </div>
+                    <?php endif; ?>
+
+                    <?php if ($fetchedReadersRaw !== null): ?>
+                        <details style="margin-top: 1rem;">
+                            <summary>Rohdaten anzeigen</summary>
+                            <pre style="white-space: pre-wrap; word-break: break-word; background: #0f172a; color: #e2e8f0; padding: 1rem; border-radius: 0.5rem;"><?= h($fetchedReadersRaw) ?></pre>
+                        </details>
+                    <?php endif; ?>
+                <?php else: ?>
+                    <p class="muted">Gib deinen Merchant Code und den API Key ein, um die verbundenen Terminals anzeigen zu lassen.</p>
+                <?php endif; ?>
+            </section>
+        </div>
+
+        <section class="card status-card" id="transaction-status-card">
+            <h2>Echtzeit-Zahlungsstatus</h2>
+            <?php if ($transactionMeta !== null): ?>
+                <p>
+                    Foreign Transaction ID:
+                    <code><?= h($transactionMeta['foreign_transaction_id']) ?></code>
+                </p>
+                <?php if (!empty($transactionMeta['client_transaction_id'])): ?>
+                    <p>
+                        Client Transaction ID:
+                        <code><?= h((string) $transactionMeta['client_transaction_id']) ?></code>
+                    </p>
+                <?php endif; ?>
+                <div class="status-pill" data-transaction-status>Polling läuft…</div>
+                <div class="status-actions">
+                    <button type="button" id="refresh-status">Status aktualisieren</button>
+                    <button type="button" id="stop-status" class="secondary-button hidden">Automatische Abfrage stoppen</button>
+                </div>
+                <pre id="transaction-status-details" class="hidden"></pre>
             <?php else: ?>
-                <label>
-                    Terminal
-                    <select name="terminal_serial"<?= $formDisabled ? ' disabled' : '' ?>>
-                        <?php foreach ($terminalOptions as $serial => $label): ?>
-                            <option value="<?= htmlspecialchars($serial, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') ?>"<?= $serial === $selectedTerminalSerial ? ' selected' : '' ?>>
-                                <?= htmlspecialchars($option['label'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') ?>
-                            </option>
-                        <?php endforeach; ?>
-                    </select>
-                </label>
+                <p class="muted">Sobald eine Zahlung gesendet wurde, erscheint hier der Live-Status.</p>
             <?php endif; ?>
+        </section>
+    </section>
+</div>
+<script>
+    const terminalReturnUrls = <?= json_encode($terminalReturnUrls, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE) ?>;
+    const terminalSelect = document.getElementById('payment-terminal');
+    const returnUrlInput = document.getElementById('return_url');
 
-            <label>
-                Rechnungsbetrag (<?= htmlspecialchars($currency, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') ?>)
-                <input
-                    type="number"
-                    name="amount"
-                    min="0"
-                    step="0.01"
-                    placeholder="z. B. 19.99"
-                    value="<?= isset($_POST['amount']) ? htmlspecialchars((string) $_POST['amount'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') : '' ?>"
-                    required
-                >
-            </label>
+    if (terminalSelect && returnUrlInput) {
+        terminalSelect.addEventListener('change', () => {
+            const selected = terminalSelect.value;
+            const storedUrl = terminalReturnUrls[selected] || '';
 
-            <label>
-                Trinkgeld (optional)
-                <input
-                    type="number"
-                    name="tip_amount"
-                    min="0"
-                    step="0.01"
-                    placeholder="z. B. 2.00"
-                    value="<?= isset($_POST['tip_amount']) ? htmlspecialchars((string) $_POST['tip_amount'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') : '' ?>"
-                >
-            </label>
+            if (storedUrl !== '' && returnUrlInput.value === '') {
+                returnUrlInput.value = storedUrl;
+            }
+        });
+    }
 
-            <label>
-                Beschreibung (optional)
-                <textarea name="description" placeholder="Referenz oder Notiz"><?= isset($_POST['description']) ? htmlspecialchars((string) $_POST['description'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') : '' ?></textarea>
-            </label>
+    const transactionMeta = <?= json_encode($transactionMeta, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE) ?>;
+    const statusCard = document.getElementById('transaction-status-card');
+    const statusPill = statusCard ? statusCard.querySelector('[data-transaction-status]') : null;
+    const statusDetails = document.getElementById('transaction-status-details');
+    const refreshButton = document.getElementById('refresh-status');
+    const stopButton = document.getElementById('stop-status');
+    let pollTimer = null;
 
-            <button type="submit"<?= $formDisabled ? ' disabled' : '' ?>>An Terminal senden</button>
-        </form>
+    function setStatusClasses(element, state) {
+        if (!element) {
+            return;
+        }
 
-        <?php if ($result !== null): ?>
-            <details>
-                <summary>Antwortdetails</summary>
-                <pre><?= htmlspecialchars(json_encode($result['details'], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE), ENT_NOQUOTES | ENT_SUBSTITUTE, 'UTF-8') ?></pre>
-            </details>
-        <?php endif; ?>
+        element.classList.remove('error', 'success');
 
-        <?php if ($accessToken === '' || $terminalOptions === []): ?>
-            <p class="alert error">
-                Bitte hinterlegen Sie den Zugriffstoken und mindestens ein Terminal in <code>config/config.php</code>.
-            </p>
-        <?php endif; ?>
-    </div>
+        if (!state) {
+            return;
+        }
+
+        const normalized = state.toUpperCase();
+
+        if (['FAILED', 'DECLINED', 'CANCELED', 'CANCELLED'].includes(normalized)) {
+            element.classList.add('error');
+        } else if (['SUCCESSFUL', 'PAID', 'COMPLETED'].includes(normalized)) {
+            element.classList.add('success');
+        }
+    }
+
+    function updateStatusView(message, payload, statusLabel) {
+        if (statusPill) {
+            statusPill.textContent = message;
+            setStatusClasses(statusPill, statusLabel);
+        }
+
+        if (statusDetails) {
+            if (payload) {
+                statusDetails.textContent = JSON.stringify(payload, null, 2);
+                statusDetails.classList.remove('hidden');
+            } else {
+                statusDetails.textContent = '';
+                statusDetails.classList.add('hidden');
+            }
+        }
+    }
+
+    function stopPolling() {
+        if (pollTimer) {
+            clearTimeout(pollTimer);
+            pollTimer = null;
+        }
+
+        if (stopButton) {
+            stopButton.classList.add('hidden');
+        }
+    }
+
+    function scheduleNextPoll() {
+        stopPolling();
+
+        pollTimer = window.setTimeout(() => {
+            requestStatus(false);
+        }, 5000);
+
+        if (stopButton) {
+            stopButton.classList.remove('hidden');
+        }
+    }
+
+    function requestStatus(showLoading = true) {
+        if (!transactionMeta || !statusCard) {
+            return;
+        }
+
+        if (showLoading) {
+            updateStatusView('Status wird abgefragt…', null, null);
+        }
+
+        const formData = new FormData();
+        formData.append('action', 'transaction_status');
+        formData.append('terminal_id', transactionMeta.terminal_id || '');
+        formData.append('foreign_transaction_id', transactionMeta.foreign_transaction_id || '');
+
+        if (transactionMeta.client_transaction_id) {
+            formData.append('client_transaction_id', transactionMeta.client_transaction_id);
+        }
+
+        fetch(window.location.href, {
+            method: 'POST',
+            headers: {
+                'X-Requested-With': 'XMLHttpRequest',
+            },
+            body: formData,
+        })
+            .then((response) => response.json())
+            .then((data) => {
+                if (!data.ok) {
+                    updateStatusView(data.error || 'Status konnte nicht geladen werden.', null, null);
+                    stopPolling();
+                    return;
+                }
+
+                const label = data.display_status || null;
+                const httpCode = typeof data.status_code === 'number' ? data.status_code : null;
+                let message = label ? `Aktueller Status: ${label}` : 'Antwort erhalten';
+
+                if (httpCode) {
+                    message += ` (HTTP ${httpCode})`;
+                }
+
+                updateStatusView(message, data.body || null, label);
+
+                if (data.final) {
+                    stopPolling();
+                } else {
+                    scheduleNextPoll();
+                }
+            })
+            .catch(() => {
+                updateStatusView('Status konnte nicht geladen werden (Netzwerkfehler).', null, null);
+                stopPolling();
+            });
+    }
+
+    if (transactionMeta && statusCard) {
+        statusCard.classList.remove('hidden');
+        requestStatus();
+    }
+
+    if (refreshButton) {
+        refreshButton.addEventListener('click', () => {
+            requestStatus();
+        });
+    }
+
+    if (stopButton) {
+        stopButton.addEventListener('click', () => {
+            stopPolling();
+            updateStatusView('Automatische Abfrage gestoppt.', null, null);
+        });
+    }
+</script>
 </body>
 </html>
