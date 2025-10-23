@@ -13,8 +13,26 @@ try {
     $transactionStorage = new TransactionStorage(__DIR__ . '/../var/transactions.json');
 } catch (\Throwable $exception) {
     http_response_code(500);
-    header('Content-Type: text/plain; charset=UTF-8');
-    echo 'Die Datenspeicher konnten nicht initialisiert werden: ' . $exception->getMessage();
+    header('Content-Type: text/html; charset=UTF-8');
+    $message = htmlspecialchars($exception->getMessage(), ENT_QUOTES, 'UTF-8');
+    echo '<!DOCTYPE html>'
+        . '<html lang="de">'
+        . '<head>'
+        . '<meta charset="utf-8">'
+        . '<meta name="viewport" content="width=device-width, initial-scale=1">'
+        . '<title>Speicherfehler</title>'
+        . '<style>body{font-family:system-ui,-apple-system,\'Segoe UI\',sans-serif;background:#0f172a;color:#e2e8f0;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;padding:2rem;}main{max-width:40rem;background:#111c33;border-radius:1rem;padding:2rem;box-shadow:0 1.5rem 3rem rgba(15,23,42,0.35);}h1{margin-top:0;margin-bottom:1rem;font-size:1.8rem;}p{margin:0 0 1rem;}code{background:rgba(148,163,184,0.2);padding:0.15rem 0.35rem;border-radius:0.35rem;font-size:0.95rem;color:#f8fafc;}</style>'
+        . '</head>'
+        . '<body>'
+        . '<main>'
+        . '<h1>Datenspeicher nicht verfügbar</h1>'
+        . '<p>Die Anwendung konnte die lokalen Speicherdateien nicht initialisieren:</p>'
+        . '<p><strong>' . $message . '</strong></p>'
+        . '<p>Bitte stellen Sie sicher, dass das Verzeichnis <code>var</code> beschreibbar ist oder setzen Sie die Umgebungsvariable <code>SUMUP_STORAGE_DIR</code> auf ein beschreibbares Verzeichnis.</p>'
+        . '<p>Alternativ kann ein temporäres Verzeichnis (z.&nbsp;B. <code>/tmp</code>) mit Schreibrechten verwendet werden.</p>'
+        . '</main>'
+        . '</body>'
+        . '</html>';
     exit;
 }
 
@@ -321,12 +339,15 @@ $fetchedReaders = null;
 $fetchedReadersRaw = null;
 $allowedViews = ['home', 'terminals', 'settings'];
 $activeView = 'home';
+$terminalStorageError = null;
+$transactionStorageError = null;
+$requestMethod = isset($_SERVER['REQUEST_METHOD']) ? (string) $_SERVER['REQUEST_METHOD'] : 'GET';
 
 if (isset($_GET['view']) && in_array($_GET['view'], $allowedViews, true)) {
     $activeView = (string) $_GET['view'];
 }
 
-if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+if ($requestMethod === 'POST') {
     $action = $_POST['action'] ?? '';
     $requestedView = (string) ($_POST['current_view'] ?? '');
 
@@ -338,9 +359,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $terminalId = (string) ($_POST['terminal_id'] ?? '');
         $foreignTransactionId = trim((string) ($_POST['foreign_transaction_id'] ?? ''));
         $clientTransactionId = trim((string) ($_POST['client_transaction_id'] ?? ''));
-        $terminal = $terminalId !== '' ? $storage->find($terminalId) : null;
+        $terminal = null;
 
         header('Content-Type: application/json; charset=UTF-8');
+
+        if ($terminalId !== '') {
+            try {
+                $terminal = $storage->find($terminalId);
+            } catch (\Throwable $storageException) {
+                echo json_encode([
+                    'ok' => false,
+                    'error' => 'Terminalspeicher konnte nicht gelesen werden: ' . $storageException->getMessage(),
+                ]);
+                exit;
+            }
+        }
 
         if ($terminal === null) {
             echo json_encode([
@@ -421,17 +454,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
 
         if ($errors === []) {
-            $storage->add($terminalForm);
-            $successMessage = 'Terminal wurde gespeichert.';
-            $terminalForm = [
-                'label' => '',
-                'merchant_code' => '',
-                'reader_id' => '',
-                'app_id' => '',
-                'affiliate_key' => '',
-                'api_key' => '',
-                'default_return_url' => '',
-            ];
+            try {
+                $storage->add($terminalForm);
+                $successMessage = 'Terminal wurde gespeichert.';
+                $terminalForm = [
+                    'label' => '',
+                    'merchant_code' => '',
+                    'reader_id' => '',
+                    'app_id' => '',
+                    'affiliate_key' => '',
+                    'api_key' => '',
+                    'default_return_url' => '',
+                ];
+            } catch (\Throwable $storageException) {
+                $errors[] = 'Terminal konnte nicht gespeichert werden: ' . $storageException->getMessage();
+            }
         }
     } elseif ($action === 'delete_terminal') {
         $activeView = 'terminals';
@@ -440,8 +477,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if ($terminalId === '') {
             $errors[] = 'Es wurde kein Terminal zum Löschen ausgewählt.';
         } else {
-            $storage->remove($terminalId);
-            $successMessage = 'Terminal wurde entfernt.';
+            try {
+                $storage->remove($terminalId);
+                $successMessage = 'Terminal wurde entfernt.';
+            } catch (\Throwable $storageException) {
+                $errors[] = 'Terminal konnte nicht entfernt werden: ' . $storageException->getMessage();
+            }
         }
     } elseif ($action === 'fetch_readers') {
         $activeView = 'settings';
@@ -504,30 +545,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $errors[] = 'Bitte wählen Sie ein Terminal aus.';
         }
 
-        $terminal = $paymentForm['terminal_id'] !== '' ? $storage->find($paymentForm['terminal_id']) : null;
+        $terminalLookupFailed = false;
+        $terminal = null;
 
-        if ($terminal === null) {
+        if ($paymentForm['terminal_id'] !== '') {
+            try {
+                $terminal = $storage->find($paymentForm['terminal_id']);
+            } catch (\Throwable $storageException) {
+                $errors[] = 'Das Terminal konnte nicht geladen werden: ' . $storageException->getMessage();
+                $terminalLookupFailed = true;
+            }
+        }
+
+        if (!$terminalLookupFailed && $terminal === null) {
             $errors[] = 'Das ausgewählte Terminal wurde nicht gefunden.';
         }
-    } elseif ($action === 'send_payment') {
-        $activeView = 'home';
-        $paymentForm = trimInput([
-            'terminal_id' => (string) ($_POST['terminal_id'] ?? ''),
-            'amount' => (string) ($_POST['amount'] ?? ''),
-            'currency' => (string) ($_POST['currency'] ?? 'EUR'),
-            'minor_unit' => (string) ($_POST['minor_unit'] ?? '2'),
-            'description' => (string) ($_POST['description'] ?? ''),
-            'return_url' => (string) ($_POST['return_url'] ?? ''),
-            'tip_rates' => (string) ($_POST['tip_rates'] ?? ''),
-            'tip_timeout' => (string) ($_POST['tip_timeout'] ?? ''),
-            'foreign_transaction_id' => (string) ($_POST['foreign_transaction_id'] ?? ''),
-        ]);
-
-        if ($paymentForm['terminal_id'] === '') {
-            $errors[] = 'Bitte wählen Sie ein Terminal aus.';
-        }
-
-        $terminal = $paymentForm['terminal_id'] !== '' ? $storage->find($paymentForm['terminal_id']) : null;
 
         $minorUnit = ctype_digit($paymentForm['minor_unit']) ? (int) $paymentForm['minor_unit'] : null;
 
@@ -691,7 +723,13 @@ if ($paymentForm['terminal_id'] === '' && $terminals !== []) {
     $paymentForm['terminal_id'] = $terminals[0]['id'];
 }
 
-$terminals = $storage->all();
+$terminals = [];
+
+try {
+    $terminals = $storage->all();
+} catch (\Throwable $storageException) {
+    $terminalStorageError = 'Die Terminals konnten nicht geladen werden: ' . $storageException->getMessage();
+}
 
 if ($paymentForm['terminal_id'] === '' && $terminals !== []) {
     $paymentForm['terminal_id'] = $terminals[0]['id'];
@@ -713,7 +751,13 @@ foreach ($terminals as $terminal) {
 
 $transactionsByTerminal = [];
 $orphanTransactions = [];
-$allTransactions = $transactionStorage->all();
+$allTransactions = [];
+
+try {
+    $allTransactions = $transactionStorage->all();
+} catch (\Throwable $storageException) {
+    $transactionStorageError = 'Die gespeicherten Zahlungen konnten nicht geladen werden: ' . $storageException->getMessage();
+}
 
 foreach ($allTransactions as $transaction) {
     if (!is_array($transaction)) {
@@ -928,6 +972,14 @@ if (is_array($checkoutResult['body'] ?? null)) {
             $appendHighlight('Betrag (Antwort)', trim($value . ' ' . (string) $amount['currency']));
         }
     }
+}
+
+if ($terminalStorageError !== null && !in_array($terminalStorageError, $errors, true)) {
+    $errors[] = $terminalStorageError;
+}
+
+if ($transactionStorageError !== null && !in_array($transactionStorageError, $errors, true)) {
+    $errors[] = $transactionStorageError;
 }
 
 header('Content-Type: text/html; charset=UTF-8');

@@ -28,7 +28,7 @@ final class TransactionStorage
         $resolved = $this->prepareStorageFile($file, $initialContent, 'transactions.json');
 
         if ($resolved === null) {
-            throw new RuntimeException('Die Transaktionsdaten konnten nicht persistiert werden. Bitte Schreibrechte für das Verzeichnis "var" vergeben oder ein beschreibbares Temp-Verzeichnis bereitstellen.');
+            throw new RuntimeException('Die Transaktionsdaten konnten nicht persistiert werden. Bitte Schreibrechte für das Verzeichnis "var" vergeben, ein beschreibbares Verzeichnis über die Umgebungsvariable "SUMUP_STORAGE_DIR" angeben oder ein beschreibbares Temp-Verzeichnis bereitstellen.');
         }
 
         $this->file = $resolved;
@@ -39,18 +39,58 @@ final class TransactionStorage
      */
     private function prepareStorageFile(string $preferredFile, string $initialContent, string $fallbackBasename)
     {
-        if ($this->initialiseFile($preferredFile, $initialContent)) {
-            return $preferredFile;
-        }
-
-        $tempDirectory = rtrim(sys_get_temp_dir(), DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . 'sumup-storage';
-        $fallbackFile = $tempDirectory . DIRECTORY_SEPARATOR . $fallbackBasename;
-
-        if ($this->initialiseFile($fallbackFile, $initialContent)) {
-            return $fallbackFile;
+        foreach ($this->candidateFiles($preferredFile, $fallbackBasename) as $candidate) {
+            if ($this->initialiseFile($candidate, $initialContent)) {
+                return $candidate;
+            }
         }
 
         return null;
+    }
+
+    /**
+     * @return string[]
+     */
+    private function candidateFiles(string $preferredFile, string $fallbackBasename): array
+    {
+        $candidates = [];
+
+        if ($preferredFile !== '') {
+            $candidates[] = $preferredFile;
+        }
+
+        $directories = [];
+        $environmentDirectory = getenv('SUMUP_STORAGE_DIR');
+
+        if (is_string($environmentDirectory) && $environmentDirectory !== '') {
+            $directories[] = $environmentDirectory;
+        }
+
+        $projectRoot = dirname(__DIR__);
+        $directories[] = $projectRoot . DIRECTORY_SEPARATOR . 'var';
+        $directories[] = $projectRoot . DIRECTORY_SEPARATOR . 'tmp';
+        $directories[] = $projectRoot . DIRECTORY_SEPARATOR . 'public' . DIRECTORY_SEPARATOR . 'data';
+        $directories[] = rtrim(sys_get_temp_dir(), DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . 'sumup-storage';
+
+        foreach ($directories as $directory) {
+            if (!is_string($directory) || $directory === '') {
+                continue;
+            }
+
+            $normalized = rtrim($directory, DIRECTORY_SEPARATOR);
+
+            if ($normalized === '') {
+                continue;
+            }
+
+            $file = $normalized . DIRECTORY_SEPARATOR . $fallbackBasename;
+
+            if (!in_array($file, $candidates, true)) {
+                $candidates[] = $file;
+            }
+        }
+
+        return $candidates;
     }
 
     private function initialiseFile(string $file, string $initialContent): bool
